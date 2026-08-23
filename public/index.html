@@ -1,98 +1,175 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Open Intel Atlas</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Open Intel Atlas：以來源與證據為核心的政治、科技、金融與災害新聞平台。" />
+    <meta name="theme-color" content="#eef0ea" />
+    <title>Open Intel Atlas｜全球新聞與證據脈絡</title>
+    <link rel="stylesheet" href="/newsroom.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <section class="map-stage" aria-label="Fullscreen signal map">
-        <div class="world-map" id="world-map" aria-label="Signal map"></div>
+    <a class="skip-link" href="#main-content">跳到主要內容</a>
 
-        <a class="scroll-cue" href="#news-panel">Scroll for records</a>
+    <div class="utility-bar" aria-label="系統狀態">
+      <div class="page-shell utility-bar__inner">
+        <p id="edition-line">本地情報版 · 正在建立本期內容</p>
+        <button class="text-button status-trigger" type="button" data-open-status>
+          <span class="state-mark" data-state-mark aria-hidden="true"></span>
+          <span data-status-label>檢查資料狀態</span>
+        </button>
+      </div>
+    </div>
+
+    <header class="site-header">
+      <div class="page-shell masthead">
+        <a class="wordmark" href="/" aria-label="Open Intel Atlas 首頁">
+          <span class="wordmark__open">OPEN INTEL</span>
+          <span class="wordmark__atlas">ATLAS</span>
+        </a>
+        <div class="masthead__statement">
+          <p class="eyebrow">GLOBAL NEWS / VERIFIED CONTEXT</p>
+          <p>把新聞、事件與原始證據放在同一條閱讀路徑上。</p>
+        </div>
+        <div class="masthead__actions">
+          <button class="search-trigger" type="button" data-open-search aria-label="開啟搜尋">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+            <span>搜尋情報</span><kbd>/</kbd>
+          </button>
+          <a class="map-link" href="/atlas.html">打開情報地圖 <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+      <nav class="desk-nav" aria-label="新聞領域">
+        <div class="page-shell desk-nav__inner">
+          <a href="#latest">最新</a><a href="#domain-politics">政治</a><a href="#domain-technology">科技發展</a>
+          <a href="#domain-finance">金融</a><a href="#domain-hazards">氣象與災害</a>
+          <button type="button" data-open-status>資料說明</button>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <section class="signal-ribbon" aria-labelledby="signal-ribbon-title">
+        <p class="signal-ribbon__label" id="signal-ribbon-title">本期狀態</p>
+        <p id="coverage-summary">正在確認來源覆蓋與資料時間…</p>
+        <button type="button" data-open-status>查看缺口</button>
       </section>
 
-      <section class="content-shell" id="news-panel">
-        <section class="hero">
-          <div>
-            <p class="eyebrow">Open Intel Atlas</p>
-            <h1>AI-ready global monitoring brief</h1>
-            <p class="lede" id="brief-summary">Loading latest public intelligence signals...</p>
+      <section class="hero-grid" aria-label="本期頭條與最新事件">
+        <article class="lead-story" id="lead-story" aria-live="polite" aria-busy="true">
+          <div class="loading-block loading-block--lead" aria-label="正在載入頭條"></div>
+        </article>
+        <aside class="live-desk" aria-labelledby="live-heading">
+          <div class="section-heading section-heading--compact">
+            <div><p class="section-index">01 / LIVE DESK</p><h2 id="live-heading">正在發生</h2></div>
+            <span class="live-indicator"><span aria-hidden="true"></span> 持續更新</span>
           </div>
-          <div class="status-panel">
-            <span class="status-dot" id="status-dot"></span>
-            <span id="status-text">Collecting sources</span>
+          <ol class="live-list" id="live-events" aria-live="polite" aria-busy="true">
+            <li class="loading-row"></li><li class="loading-row"></li><li class="loading-row"></li>
+          </ol>
+        </aside>
+      </section>
+
+      <section class="latest-layout" id="latest" aria-labelledby="latest-heading">
+        <div class="latest-column">
+          <div class="section-heading">
+            <div><p class="section-index">02 / LATEST REPORTS</p><h2 id="latest-heading">最新報導</h2></div>
+            <p class="section-note">依後端最新時間排序，不另加人氣分數。</p>
           </div>
-        </section>
-
-        <section class="filter-bar" aria-label="News filters">
-          <div>
-            <p class="eyebrow">Time window</p>
-            <div class="time-buttons" role="group" aria-label="Select time window">
-              <button class="time-button active" type="button" data-range="live">Realtime</button>
-              <button class="time-button" type="button" data-range="24h">24H</button>
-              <button class="time-button" type="button" data-range="7d">7D</button>
-              <button class="time-button" type="button" data-range="30d">30D</button>
-              <button class="time-button" type="button" data-range="all">All</button>
-            </div>
+          <div class="story-stream" id="latest-stories" aria-live="polite" aria-busy="true">
+            <div class="loading-story"></div><div class="loading-story"></div><div class="loading-story"></div>
           </div>
-          <label class="date-filter">
-            <span>Specific date</span>
-            <input id="date-filter" type="date" />
-          </label>
-          <label class="category-field">
-            <span>Category</span>
-            <select id="category-filter" aria-label="Filter category">
-              <option value="all">All categories</option>
-              <option value="geopolitics">Geopolitics</option>
-              <option value="infrastructure">Infrastructure</option>
-              <option value="finance">Finance</option>
-              <option value="ai">AI Updates</option>
-            </select>
-          </label>
-        </section>
-
-        <section class="metrics-grid" id="metrics-grid" aria-label="Category metrics"></section>
-
-        <section class="source-panel" aria-label="Source registry">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Sources</p>
-              <h2>Registry and health</h2>
-            </div>
-            <code>/api/sources</code>
+        </div>
+        <aside class="field-notes" aria-labelledby="field-notes-heading">
+          <div class="field-notes__header"><p class="section-index">FIELD NOTES</p><h2 id="field-notes-heading">這一期怎麼看</h2></div>
+          <div class="edition-note">
+            <p class="edition-note__number" id="event-count">—</p><p>個事件進入本期摘要</p>
+            <p class="muted" id="source-count">正在讀取可用來源</p>
           </div>
-          <div id="source-list" class="source-list"></div>
-        </section>
+          <div class="freshness-matrix" id="freshness-matrix" aria-label="各領域資料新鮮度"><p class="muted">正在檢查各領域…</p></div>
+          <a class="atlas-callout" href="/atlas.html">
+            <span class="atlas-callout__coordinate">MAP / 04</span><strong>從地點看事件</strong>
+            <span>只有具備可驗證位置的事件才會出現在地圖上。</span><span class="atlas-callout__arrow" aria-hidden="true">↗</span>
+          </a>
+        </aside>
+      </section>
 
-        <section class="news-layout">
-          <div class="brief-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Dispatch</p>
-                <h2>AI handoff feed</h2>
-              </div>
-              <button id="refresh-button" type="button">Refresh</button>
-            </div>
-            <div class="watchlist" id="watchlist"></div>
-          </div>
-
-          <section class="event-feed">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Events</p>
-                <h2>Normalized source records</h2>
-              </div>
-              <code>/api/dispatch</code>
-            </div>
-            <div id="event-list" class="event-list"></div>
+      <section class="domain-section" aria-labelledby="domain-heading">
+        <div class="section-heading section-heading--wide">
+          <div><p class="section-index">03 / DOMAIN DESKS</p><h2 id="domain-heading">四個觀察面向</h2></div>
+          <p class="section-note">各版只顯示該領域目前可取得的事件；空白也是資料狀態的一部分。</p>
+        </div>
+        <div class="domain-grid">
+          <section class="domain-desk" id="domain-politics" data-domain-section="politics">
+            <header><p>POLITICS</p><h3>政治</h3><span data-domain-freshness="politics">檢查中</span></header>
+            <div class="domain-desk__stories" data-domain-list="politics" aria-live="polite"><div class="loading-row"></div></div>
           </section>
-        </section>
+          <section class="domain-desk" id="domain-technology" data-domain-section="technology">
+            <header><p>TECHNOLOGY</p><h3>科技發展</h3><span data-domain-freshness="technology">檢查中</span></header>
+            <div class="domain-desk__stories" data-domain-list="technology" aria-live="polite"><div class="loading-row"></div></div>
+          </section>
+          <section class="domain-desk" id="domain-finance" data-domain-section="finance">
+            <header><p>FINANCE</p><h3>金融</h3><span data-domain-freshness="finance">檢查中</span></header>
+            <div class="domain-desk__stories" data-domain-list="finance" aria-live="polite"><div class="loading-row"></div></div>
+          </section>
+          <section class="domain-desk" id="domain-hazards" data-domain-section="hazards">
+            <header><p>WEATHER / HAZARDS</p><h3>氣象與災害</h3><span data-domain-freshness="hazards">檢查中</span></header>
+            <div class="domain-desk__stories" data-domain-list="hazards" aria-live="polite"><div class="loading-row"></div></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="method-strip" aria-labelledby="method-heading">
+        <div><p class="section-index">HOW TO READ</p><h2 id="method-heading">不是每則訊號都等於已證實的新聞。</h2></div>
+        <p>Atlas 將來源文件聚成報導，再融合成事件。驗證狀態、來源數與資料新鮮度都由後端提供；前端只負責把限制一起呈現。</p>
+        <button type="button" data-open-status>閱讀資料說明</button>
       </section>
     </main>
 
-    <script src="/app.js" type="module"></script>
+    <footer class="site-footer">
+      <div class="page-shell site-footer__inner">
+        <div><strong>OPEN INTEL ATLAS</strong><p>Local-first global intelligence newsroom.</p></div>
+        <p id="footer-updated">等待資料更新時間</p>
+        <div class="site-footer__links"><a href="/atlas.html">情報地圖</a><button type="button" data-open-search>搜尋</button><button type="button" data-open-status>資料狀態</button></div>
+      </div>
+    </footer>
+
+    <dialog class="detail-dialog" id="detail-dialog" aria-labelledby="detail-title">
+      <div class="dialog-frame">
+        <header class="dialog-header">
+          <div><p class="section-index" id="detail-kicker">EVIDENCE VIEW</p><p class="dialog-context">事件、報導與原始來源</p></div>
+          <button class="close-button" type="button" data-close-dialog aria-label="關閉詳情">關閉 <span aria-hidden="true">×</span></button>
+        </header>
+        <div class="dialog-body" id="detail-content"><h2 id="detail-title">載入中</h2></div>
+      </div>
+    </dialog>
+
+    <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+      <div class="search-panel">
+        <header class="dialog-header">
+          <div><p class="section-index">SEARCH THE ATLAS</p><h2 id="search-title">搜尋情報</h2></div>
+          <button class="close-button" type="button" data-close-dialog aria-label="關閉搜尋">關閉 <span aria-hidden="true">×</span></button>
+        </header>
+        <form class="search-form" id="search-form" role="search">
+          <label for="newsroom-search-input">輸入主題、公司、地區或關鍵字</label>
+          <div><input id="newsroom-search-input" name="q" type="search" autocomplete="off" minlength="2" required /><button type="submit">搜尋</button></div>
+        </form>
+        <div class="search-results" id="search-results" aria-live="polite"><p>搜尋會同時比對事件、報導與來源文件。</p></div>
+      </div>
+    </dialog>
+
+    <dialog class="status-dialog" id="status-dialog" aria-labelledby="status-title">
+      <div class="status-panel">
+        <header class="dialog-header">
+          <div><p class="section-index">DATA STATUS</p><h2 id="status-title">資料狀態與限制</h2></div>
+          <button class="close-button" type="button" data-close-dialog aria-label="關閉資料狀態">關閉 <span aria-hidden="true">×</span></button>
+        </header>
+        <div id="status-content" class="status-content"><p>正在取得來源覆蓋與更新時間…</p></div>
+      </div>
+    </dialog>
+
+    <noscript><div class="noscript-note">這個頁面需要 JavaScript 才能讀取本機新聞 API。請啟用 JavaScript 後重新整理。</div></noscript>
+
+    <script src="/newsroom.js" type="module"></script>
   </body>
 </html>

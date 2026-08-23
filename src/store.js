@@ -9,6 +9,7 @@ const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
 const DB_DIR = join(ROOT_DIR, "data", "db");
 const DB_BY_CATEGORY = new Map();
 let sourceDb = null;
+let dashboardDb = null;
 
 export function saveEventsByCategory(events) {
   const now = new Date().toISOString();
@@ -212,6 +213,178 @@ export function listSourceStatuses(sourceOrder = []) {
   return rows.map(sourceRowToStatus).sort((a, b) => `${a.category}:${a.name}`.localeCompare(`${b.category}:${b.name}`));
 }
 
+export function saveDashboardSnapshot(snapshot) {
+  const db = getDashboardDb();
+  const snapshotId = stableId("dashboard", `${snapshot.generated_at}:${JSON.stringify(snapshot.filters || {})}`);
+  const filters = snapshot.filters || {};
+  const insertSnapshot = db.prepare(`
+    INSERT INTO dashboard_snapshots (
+      id,
+      generated_at,
+      horizon,
+      range,
+      date,
+      category,
+      degraded,
+      event_count,
+      story_count,
+      topic_count,
+      snapshot_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      generated_at = excluded.generated_at,
+      horizon = excluded.horizon,
+      range = excluded.range,
+      date = excluded.date,
+      category = excluded.category,
+      degraded = excluded.degraded,
+      event_count = excluded.event_count,
+      story_count = excluded.story_count,
+      topic_count = excluded.topic_count,
+      snapshot_json = excluded.snapshot_json
+  `);
+  const insertStory = db.prepare(`
+    INSERT INTO stories (
+      id,
+      snapshot_id,
+      generated_at,
+      title,
+      topic,
+      category,
+      severity,
+      score,
+      confidence,
+      direction,
+      velocity,
+      event_count,
+      evidence_json,
+      raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id, snapshot_id) DO UPDATE SET
+      generated_at = excluded.generated_at,
+      title = excluded.title,
+      topic = excluded.topic,
+      category = excluded.category,
+      severity = excluded.severity,
+      score = excluded.score,
+      confidence = excluded.confidence,
+      direction = excluded.direction,
+      velocity = excluded.velocity,
+      event_count = excluded.event_count,
+      evidence_json = excluded.evidence_json,
+      raw_json = excluded.raw_json
+  `);
+  const insertTopic = db.prepare(`
+    INSERT INTO topic_snapshots (
+      id,
+      snapshot_id,
+      generated_at,
+      label,
+      category,
+      score,
+      direction,
+      velocity,
+      event_count,
+      high_or_above,
+      raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id, snapshot_id) DO UPDATE SET
+      generated_at = excluded.generated_at,
+      label = excluded.label,
+      category = excluded.category,
+      score = excluded.score,
+      direction = excluded.direction,
+      velocity = excluded.velocity,
+      event_count = excluded.event_count,
+      high_or_above = excluded.high_or_above,
+      raw_json = excluded.raw_json
+  `);
+
+  db.exec("BEGIN");
+  try {
+    insertSnapshot.run(
+      snapshotId,
+      snapshot.generated_at,
+      snapshot.horizon,
+      filters.range || null,
+      filters.date || null,
+      filters.category || null,
+      snapshot.degraded ? 1 : 0,
+      Number(snapshot.coverage?.event_count || 0),
+      snapshot.stories.length,
+      snapshot.topics.length,
+      JSON.stringify(snapshot)
+    );
+    db.prepare("DELETE FROM stories WHERE snapshot_id = ?").run(snapshotId);
+    db.prepare("DELETE FROM topic_snapshots WHERE snapshot_id = ?").run(snapshotId);
+
+    for (const story of snapshot.stories) {
+      insertStory.run(
+        story.id,
+        snapshotId,
+        snapshot.generated_at,
+        story.title,
+        story.topic,
+        story.category,
+        story.severity,
+        Number(story.score || 0),
+        Number(story.confidence || 0),
+        story.direction,
+        Number(story.velocity || 0),
+        Number(story.event_count || 0),
+        JSON.stringify(story.evidence || []),
+        JSON.stringify(story)
+      );
+    }
+
+    for (const topic of snapshot.topics) {
+      insertTopic.run(
+        topic.id,
+        snapshotId,
+        snapshot.generated_at,
+        topic.label,
+        topic.category,
+        Number(topic.score || 0),
+        topic.direction,
+        Number(topic.velocity || 0),
+        Number(topic.event_count || 0),
+        Number(topic.high_or_above || 0),
+        JSON.stringify(topic)
+      );
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    id: snapshotId,
+    db_file: join(DB_DIR, "dashboard.sqlite"),
+    stored_at: snapshot.generated_at,
+    stories: snapshot.stories.length,
+    topics: snapshot.topics.length
+  };
+}
+
+export function getDashboardStats() {
+  const db = getDashboardDb();
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) AS count, MAX(generated_at) AS latest_generated_at, SUM(story_count) AS stored_story_rows, SUM(topic_count) AS stored_topic_rows FROM dashboard_snapshots"
+    )
+    .get();
+
+  return {
+    db_file: join(DB_DIR, "dashboard.sqlite"),
+    snapshots: Number(row.count || 0),
+    latest_generated_at: row.latest_generated_at || null,
+    stored_story_rows: Number(row.stored_story_rows || 0),
+    stored_topic_rows: Number(row.stored_topic_rows || 0)
+  };
+}
+
 export function resolveTimeWindow(options = {}) {
   const now = Date.now();
 
@@ -315,6 +488,70 @@ function getSourceDb() {
   `);
 
   return sourceDb;
+}
+
+function getDashboardDb() {
+  if (dashboardDb) {
+    return dashboardDb;
+  }
+
+  mkdirSync(DB_DIR, { recursive: true });
+
+  dashboardDb = new DatabaseSync(join(DB_DIR, "dashboard.sqlite"));
+  dashboardDb.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+      id TEXT PRIMARY KEY,
+      generated_at TEXT NOT NULL,
+      horizon TEXT NOT NULL,
+      range TEXT,
+      date TEXT,
+      category TEXT,
+      degraded INTEGER NOT NULL,
+      event_count INTEGER NOT NULL,
+      story_count INTEGER NOT NULL,
+      topic_count INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS stories (
+      id TEXT NOT NULL,
+      snapshot_id TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      title TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      category TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      score REAL NOT NULL,
+      confidence REAL NOT NULL,
+      direction TEXT NOT NULL,
+      velocity REAL NOT NULL,
+      event_count INTEGER NOT NULL,
+      evidence_json TEXT NOT NULL,
+      raw_json TEXT NOT NULL,
+      PRIMARY KEY (id, snapshot_id)
+    );
+    CREATE TABLE IF NOT EXISTS topic_snapshots (
+      id TEXT NOT NULL,
+      snapshot_id TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      label TEXT NOT NULL,
+      category TEXT NOT NULL,
+      score REAL NOT NULL,
+      direction TEXT NOT NULL,
+      velocity REAL NOT NULL,
+      event_count INTEGER NOT NULL,
+      high_or_above INTEGER NOT NULL,
+      raw_json TEXT NOT NULL,
+      PRIMARY KEY (id, snapshot_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_generated_at ON dashboard_snapshots(generated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stories_snapshot ON stories(snapshot_id);
+    CREATE INDEX IF NOT EXISTS idx_stories_score ON stories(score DESC);
+    CREATE INDEX IF NOT EXISTS idx_topic_snapshots_snapshot ON topic_snapshots(snapshot_id);
+    CREATE INDEX IF NOT EXISTS idx_topic_snapshots_score ON topic_snapshots(score DESC);
+  `);
+
+  return dashboardDb;
 }
 
 function queryCategoryEvents(db, options) {
@@ -426,4 +663,16 @@ function parseJsonArray(value) {
   } catch {
     return [];
   }
+}
+
+function stableId(prefix, value) {
+  const input = String(value || "unknown");
+  let hash = 0;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash << 5) - hash + input.charCodeAt(index);
+    hash |= 0;
+  }
+
+  return `${prefix}-${Math.abs(hash).toString(36)}`;
 }

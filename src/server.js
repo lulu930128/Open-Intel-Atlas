@@ -3,12 +3,20 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDispatch } from "./analysis.js";
+import { buildDashboardSnapshot } from "./dashboard.js";
 import { collectIntel } from "./sources.js";
-import { getStoreStats, listStoredEvents, saveEventsByCategory, saveSourceStatuses } from "./store.js";
+import {
+  getDashboardStats,
+  getStoreStats,
+  listStoredEvents,
+  saveDashboardSnapshot,
+  saveEventsByCategory,
+  saveSourceStatuses
+} from "./store.js";
 
 const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = join(ROOT_DIR, "public");
-const PORT = Number(process.env.PORT || 8787);
+const PORT = Number(process.env.PORT || 8790);
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 300);
 
 let cache = null;
@@ -21,7 +29,7 @@ const server = createServer(async (request, response) => {
       return sendJson(response, {
         ok: true,
         name: "Open Intel Atlas",
-        version: "0.6.0",
+        version: "0.8.0",
         now: new Date().toISOString()
       });
     }
@@ -41,6 +49,26 @@ const server = createServer(async (request, response) => {
       });
     }
 
+    if (request.method === "GET" && requestUrl.pathname === "/api/dashboard") {
+      const query = parseEventQuery(requestUrl.searchParams);
+      const payload = await getIntelPayload();
+      const dashboard = buildDashboardForQuery(payload, query);
+      const snapshotStore = saveDashboardSnapshot(dashboard);
+
+      return sendJson(response, {
+        generated_at: dashboard.generated_at,
+        degraded: payload.degraded,
+        filters: query,
+        sources: payload.sources,
+        database: {
+          events: getStoreStats(),
+          dashboard: getDashboardStats()
+        },
+        snapshot_store: snapshotStore,
+        dashboard
+      });
+    }
+
     if (request.method === "GET" && requestUrl.pathname === "/api/dispatch") {
       const query = parseEventQuery(requestUrl.searchParams);
       const payload = await getIntelPayload();
@@ -52,6 +80,61 @@ const server = createServer(async (request, response) => {
         sources: payload.sources,
         database: getStoreStats(),
         dispatch: buildDispatch(events, { limit: query.limit })
+      });
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/stories") {
+      const query = parseEventQuery(requestUrl.searchParams);
+      const payload = await getIntelPayload();
+      const dashboard = buildDashboardForQuery(payload, query);
+
+      return sendJson(response, {
+        generated_at: dashboard.generated_at,
+        degraded: payload.degraded,
+        filters: query,
+        summary: dashboard.summary,
+        stories: dashboard.stories,
+        evidence_feed: dashboard.evidence_feed
+      });
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/topics") {
+      const query = parseEventQuery(requestUrl.searchParams);
+      const payload = await getIntelPayload();
+      const dashboard = buildDashboardForQuery(payload, query);
+
+      return sendJson(response, {
+        generated_at: dashboard.generated_at,
+        degraded: payload.degraded,
+        filters: query,
+        topics: dashboard.topics,
+        sector_heat: dashboard.sector_heat
+      });
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/evidence") {
+      const query = parseEventQuery(requestUrl.searchParams);
+      const payload = await getIntelPayload();
+      const dashboard = buildDashboardForQuery(payload, query);
+
+      return sendJson(response, {
+        generated_at: dashboard.generated_at,
+        degraded: payload.degraded,
+        filters: query,
+        evidence_feed: dashboard.evidence_feed
+      });
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/map-points") {
+      const query = parseEventQuery(requestUrl.searchParams);
+      const payload = await getIntelPayload();
+      const dashboard = buildDashboardForQuery(payload, query);
+
+      return sendJson(response, {
+        generated_at: dashboard.generated_at,
+        degraded: payload.degraded,
+        filters: query,
+        mini_map_points: dashboard.mini_map_points
       });
     }
 
@@ -110,6 +193,15 @@ function resolveEventsForQuery(payload, query) {
     : payload.events.filter((event) => !query.category || event.category === query.category);
 
   return events.slice(0, query.limit);
+}
+
+function buildDashboardForQuery(payload, query) {
+  const events = resolveEventsForQuery(payload, query);
+
+  return buildDashboardSnapshot(events, payload.sources, {
+    degraded: payload.degraded,
+    filters: query
+  });
 }
 
 function parseEventQuery(searchParams) {
