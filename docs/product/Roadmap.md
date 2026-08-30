@@ -6,11 +6,11 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 ## 目前基線
 
-- `已存在`：Node.js 原生 HTTP server、23-source registry、canonical `Source → Document → Story → Event` pipeline、schema v2 `atlas.sqlite`、SQLite-owned persistent scheduler、bounded catch-up、conditional GET、domain freshness、`/api/v1`、legacy projection、editorial newsroom／map UI、contract tests，以及由 current-user Windows logon task 啟動的 single-instance 托盤 owner。
-- `進行中`：Operational UI 第一個可用版本已完成 overview、事件／報導 evidence view、domain desks、search 與 system status；接著收斂 correction/retraction、consumer adoption 與長期營運能力。
-- `尚未完成`：correction/retraction 完整流程、auth/rate limit、公網部署、MCP、OMI/Kuro runtime wiring、backup retention/restore drill 與多節點 scheduler。
+- `已存在`：Node.js 原生 HTTP server、23-source registry、canonical `Source → Document → Story → Event` pipeline、schema v3 `atlas.sqlite`、SQLite-owned persistent scheduler、durable `story_updates`、bounded catch-up、conditional GET、domain freshness、consumer contract `1.1` profiles、`/api/v1`、loopback read-only MCP、legacy projection、editorial newsroom／map UI、contract tests，以及由 current-user Windows logon task 啟動的 single-instance 托盤 owner。
+- `進行中`：Operational UI 第一個可用版本已完成 overview、事件／報導 evidence view、domain desks、search 與 system status；Consumer Gateway 已完成 Atlas 端 contract 與 local protocol proof，接著收斂 correction/retraction、OMI/Kuro 實際採用與長期營運能力。
+- `尚未完成`：correction/retraction 完整流程、auth/rate limit、公網部署、OMI/Kuro runtime wiring、backup retention/restore drill 與多節點 scheduler。
 
-目前 repo 有未提交的 Backend v1 與 frontend 工作；後續里程碑應先完成或明確收斂這批變更，不再另開一套互相競爭的 backend。
+後續里程碑必須接續目前 canonical backend、Consumer Gateway 與既有 frontend projection，不另開互相競爭的 backend 或資料 truth。
 
 ## 里程碑
 
@@ -42,7 +42,7 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 成果：`/api/v1` read API、cursor pagination、contract envelope、auth/rate limit 邊界、read-only MCP tools/resources 與相容政策。
 
-驗收：API contract tests；MCP `initialize → tools/list → representative call/resource read`；查詢不觸發無界外部 fetch。
+驗收：API contract tests；MCP modern `server/discover → tools/list → representative call/resource read` 與 legacy stateless compatibility；查詢不觸發無界外部 fetch。
 
 ### M5：OMI 與 Kuro 採用
 
@@ -60,12 +60,13 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 1. 讓 Operational UI 直接呈現 v1 domain freshness、source gap 與 Story/Event evidence，不在前端重算語意。
 2. 補 correction/retraction、retention、backup/restore 與 provider contract regression。
-3. 建立 read-only MCP；MCP 不另建一套商業邏輯。
-4. 以 OMI 與 Kuro 各一條最小真實讀取流程驗證 contract，而不是先做大量 consumer-specific endpoints。
+3. 以 OMI 與 Kuro 各一條最小真實讀取流程驗證 contract，而不是先做大量 consumer-specific endpoints。
+4. 定義 change retention、cursor expiry 與 snapshot resync，再考慮 pruning。
 
 ## 近期完成
 
 - `2026-08-23`：交付 editorial newsroom v1。首頁以 backend-selected highlight 作頭條，提供 live events、latest stories、四領域版面、跨事件／報導／文件搜尋、evidence drawer 與 partial/stale/source-gap 說明；desktop 與 360px browser smoke 通過，既有全屏地圖維持可用。
+- `2026-08-23`：交付 Consumer Gateway v1。Schema v3 保存 durable Story/Event changes；REST 與 MCP 共用 contract `1.1` profiles；loopback MCP 通過 modern/legacy protocol smoke。外部 OMI/Kuro adoption 仍屬 M5。
 
 ## 延後事項
 

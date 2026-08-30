@@ -593,7 +593,10 @@ class AtlasStore {
   }
 
   saveEvent(event) {
+    const storyId = event.stories?.find((story) => story.relationship === "primary")?.story_id || event.stories?.[0]?.story_id;
+    if (!storyId) throw new Error(`Event ${event.id} is missing its owning Story`);
     this.transaction(() => {
+      const previousState = this.getStoredEventState(event.id);
       this.db
         .prepare(`
           INSERT INTO events (
@@ -718,7 +721,59 @@ class AtlasStore {
           location.is_primary ? 1 : 0
         );
       }
+
+      this.recordStoryUpdate(storyId, previousState, consumerEventState(event), event.updated_at);
     });
+  }
+
+  getStoredEventState(eventId) {
+    const row = this.db.prepare("SELECT * FROM events WHERE id = ?").get(eventId);
+    if (!row) return null;
+    return consumerEventState({
+      ...row,
+      domains: this.db.prepare("SELECT domain, confidence FROM event_domains WHERE event_id = ? ORDER BY confidence DESC, domain").all(eventId),
+      stories: this.db.prepare("SELECT story_id, relationship, confidence FROM event_stories WHERE event_id = ? ORDER BY relationship, story_id").all(eventId),
+      evidence: this.db.prepare("SELECT document_id, evidence_role, supports, confidence FROM event_evidence WHERE event_id = ? ORDER BY document_id").all(eventId),
+      entities: this.db.prepare("SELECT entity_id AS id, role, confidence FROM event_entities WHERE event_id = ? ORDER BY entity_id, role").all(eventId),
+      locations: this.db.prepare("SELECT * FROM event_locations WHERE event_id = ? ORDER BY is_primary DESC, id").all(eventId)
+    });
+  }
+
+  recordStoryUpdate(storyId, previousState, currentState, now = new Date().toISOString()) {
+    const reasonCodes = changeReasonCodes(previousState, currentState);
+    if (reasonCodes.length === 0) return null;
+
+    const story = this.db.prepare("SELECT version FROM stories WHERE id = ?").get(storyId);
+    if (!story) throw new Error(`Story not found while recording update: ${storyId}`);
+    const storyVersion = Number(story.version || 0) + 1;
+    const changeType = selectChangeType(previousState, currentState, reasonCodes);
+    const id = stableId("change", `${storyId}:${storyVersion}:${changeType}`);
+    this.db.prepare("UPDATE stories SET version = ?, updated_at = ? WHERE id = ?").run(storyVersion, now, storyId);
+    this.db
+      .prepare(`
+        INSERT INTO story_updates (
+          id, story_id, event_id, story_version, change_type, primary_domain,
+          event_severity, verification_status, previous_state_json, current_state_json,
+          reason_codes_json, evidence_ids_json, occurred_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        storyId,
+        currentState.id,
+        storyVersion,
+        changeType,
+        currentState.primary_domain,
+        currentState.event_severity,
+        currentState.verification_status,
+        previousState ? boundedJson(previousState, 32000) : null,
+        boundedJson(currentState, 32000),
+        JSON.stringify(reasonCodes),
+        JSON.stringify(currentState.evidence_ids),
+        now,
+        now
+      );
+    return id;
   }
 
   listSources() {
@@ -788,6 +843,54 @@ class AtlasStore {
   getStory(storyId) {
     const row = this.db.prepare("SELECT * FROM stories WHERE id = ?").get(storyId);
     return row ? { ...storyRow(row), documents: this.getStoryDocuments(storyId) } : null;
+  }
+
+  getStoryEvent(storyId) {
+    const row = this.db
+      .prepare(`
+        SELECT event_id FROM event_stories
+        WHERE story_id = ?
+        ORDER BY CASE relationship WHEN 'primary' THEN 0 ELSE 1 END, event_id
+        LIMIT 1
+      `)
+      .get(storyId);
+    return row ? this.getEvent(row.event_id) : null;
+  }
+
+  listStoryUpdates(filters = {}) {
+    const limit = clampLimit(filters.limit);
+    const afterSequence = Math.max(0, Number(filters.after_sequence) || 0);
+    const clauses = ["sequence > ?"];
+    const values = [afterSequence];
+    if (filters.domain) {
+      clauses.push("primary_domain = ?");
+      values.push(filters.domain);
+    }
+    if (filters.change_type) {
+      clauses.push("change_type = ?");
+      values.push(filters.change_type);
+    }
+    const bounds = this.db.prepare("SELECT MIN(sequence) AS min_sequence, MAX(sequence) AS head_sequence FROM story_updates").get();
+    const headSequence = Number(bounds.head_sequence || 0);
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM story_updates
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY sequence ASC
+        LIMIT ?
+      `)
+      .all(...values, limit + 1);
+    const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const nextSequence = hasMore ? Number(selected.at(-1)?.sequence || afterSequence) : headSequence;
+    return {
+      items: selected.map(storyUpdateRow),
+      after_sequence: afterSequence,
+      next_sequence: nextSequence,
+      min_sequence: Number(bounds.min_sequence || 0),
+      head_sequence: headSequence,
+      has_more: hasMore
+    };
   }
 
   listEvents(filters = {}) {
@@ -943,7 +1046,7 @@ class AtlasStore {
 
   getStats() {
     const counts = {};
-    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "stories", "events", "entities"]) {
+    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "stories", "story_updates", "events", "entities"]) {
       counts[table] = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count || 0);
     }
     const lastRun = this.db.prepare("SELECT MAX(finished_at) AS value FROM source_runs").get().value || null;
@@ -1176,6 +1279,7 @@ function storyRow(row) {
     canonical_title: row.canonical_title,
     summary: row.representative_summary || null,
     status: row.status,
+    version: Number(row.version || 0),
     first_seen_at: row.first_seen_at,
     last_seen_at: row.last_seen_at,
     document_count: Number(row.document_count || 0),
@@ -1185,6 +1289,105 @@ function storyRow(row) {
     representative_document_id: row.representative_document_id,
     merged_into_story_id: row.merged_into_story_id || null
   };
+}
+
+function storyUpdateRow(row) {
+  return {
+    id: row.id,
+    sequence: Number(row.sequence),
+    story_id: row.story_id,
+    event_id: row.event_id,
+    story_version: Number(row.story_version),
+    change_type: row.change_type,
+    primary_domain: row.primary_domain,
+    verification_status: row.verification_status,
+    importance: {
+      level: row.event_severity,
+      reason_codes: parseJson(row.reason_codes_json, [])
+    },
+    previous_state: parseJson(row.previous_state_json),
+    current_state: parseJson(row.current_state_json, {}),
+    evidence_ids: parseJson(row.evidence_ids_json, []),
+    occurred_at: row.occurred_at,
+    created_at: row.created_at
+  };
+}
+
+function consumerEventState(event) {
+  const primaryLocation = (event.locations || []).find((location) => Boolean(location.is_primary)) || event.locations?.[0] || null;
+  return {
+    id: event.id,
+    event_type: event.event_type,
+    title: event.title,
+    summary: event.summary || null,
+    primary_domain: event.primary_domain,
+    domains: (event.domains || [])
+      .map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) }))
+      .sort((left, right) => left.domain.localeCompare(right.domain)),
+    lifecycle: event.lifecycle,
+    verification_status: event.verification_status,
+    event_severity: event.event_severity,
+    occurred_at: event.occurred_at || null,
+    first_seen_at: event.first_seen_at,
+    last_updated_at: event.last_updated_at,
+    evidence_count: Number(event.evidence_count || event.evidence?.length || 0),
+    independent_source_count: Number(event.independent_source_count || 0),
+    has_primary_source: Boolean(event.has_primary_source),
+    has_official_source: Boolean(event.has_official_source),
+    evidence_ids: (event.evidence || []).map((entry) => entry.document_id).filter(Boolean).sort(),
+    entity_ids: (event.entities || []).map((entry) => entry.id).filter(Boolean).sort(),
+    location: primaryLocation
+      ? {
+          id: primaryLocation.id,
+          label: primaryLocation.label || null,
+          country_code: primaryLocation.country_code || null,
+          latitude: primaryLocation.latitude === null || primaryLocation.latitude === undefined ? null : Number(primaryLocation.latitude),
+          longitude: primaryLocation.longitude === null || primaryLocation.longitude === undefined ? null : Number(primaryLocation.longitude),
+          precision: primaryLocation.precision || null
+        }
+      : null
+  };
+}
+
+function changeReasonCodes(previous, current) {
+  if (!previous) return ["STORY_CREATED"];
+  const reasons = [];
+  if (previous.verification_status !== current.verification_status) reasons.push("VERIFICATION_CHANGED");
+  if (previous.event_severity !== current.event_severity) reasons.push("SEVERITY_CHANGED");
+  if (previous.lifecycle !== current.lifecycle) reasons.push("LIFECYCLE_CHANGED");
+  if (previous.event_type !== current.event_type) reasons.push("EVENT_TYPE_CHANGED");
+  if (previous.title !== current.title) reasons.push("TITLE_CHANGED");
+  if (previous.summary !== current.summary) reasons.push("SUMMARY_CHANGED");
+  if (previous.occurred_at !== current.occurred_at) reasons.push("OCCURRED_AT_CHANGED");
+  if (JSON.stringify(previous.domains) !== JSON.stringify(current.domains)) reasons.push("DOMAINS_CHANGED");
+  if (JSON.stringify(previous.evidence_ids) !== JSON.stringify(current.evidence_ids)) reasons.push("EVIDENCE_CHANGED");
+  if (JSON.stringify(previous.entity_ids) !== JSON.stringify(current.entity_ids)) reasons.push("ENTITIES_CHANGED");
+  if (JSON.stringify(previous.location) !== JSON.stringify(current.location)) reasons.push("LOCATION_CHANGED");
+  if (previous.independent_source_count !== current.independent_source_count) reasons.push("SOURCE_INDEPENDENCE_CHANGED");
+  if (previous.has_primary_source !== current.has_primary_source) reasons.push("PRIMARY_SOURCE_STATUS_CHANGED");
+  if (previous.has_official_source !== current.has_official_source) reasons.push("OFFICIAL_SOURCE_STATUS_CHANGED");
+  return reasons;
+}
+
+function selectChangeType(previous, current, reasonCodes) {
+  if (!previous) return "story_created";
+  if (previous.verification_status !== current.verification_status) {
+    if (current.verification_status === "retracted") return "story_retracted";
+    if (current.verification_status === "corrected") return "story_corrected";
+    if (current.verification_status === "disputed") return "story_disputed";
+  }
+  if (previous.lifecycle !== current.lifecycle && current.lifecycle === "resolved") return "event_resolved";
+  if (previous.event_severity !== current.event_severity && severityRank(current.event_severity) > severityRank(previous.event_severity)) {
+    return "event_escalated";
+  }
+  if (reasonCodes.includes("VERIFICATION_CHANGED")) return "verification_changed";
+  if (reasonCodes.includes("SEVERITY_CHANGED")) return "severity_changed";
+  if (reasonCodes.includes("EVIDENCE_CHANGED") && current.evidence_ids.length > previous.evidence_ids.length) return "evidence_added";
+  return "story_updated";
+}
+
+function severityRank(value) {
+  return { low: 1, medium: 2, high: 3, critical: 4 }[value] || 0;
 }
 
 function entityRow(row) {

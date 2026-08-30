@@ -2,20 +2,21 @@
 
 Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓取公開資料源，整理成統一的事件格式，提供人類可讀的 newsroom、全屏世界地圖，以及給其他程式或 AI agent 呼叫的 JSON API。
 
-目前版本：`1.1.0`
+目前版本：`1.2.0`
 
 這不是 World Monitor 的 clone。此專案使用自己的資料模型、API contract、UI 版面、source registry 和本地 SQLite 儲存方式。
 
 ## 目前實作狀態
 
-- Node.js 24+ 原生 HTTP server，無前端框架、無第三方 npm dependency。
+- Node.js 24+ 原生 HTTP server，無前端框架；MCP transport 使用官方 TypeScript SDK v2 與 Zod schema validation。
 - 新的 canonical pipeline 採用 `Source → Document → Story → Event`，保留來源、raw fetch、衍生方法與證據 lineage。
 - 23 個 source adapter 已註冊；17 個無額外憑證即可啟用，6 個會在缺少設定或未明確開啟時 fail closed。
 - 每個來源各自保存 run status、最後成功／失敗、錯誤、筆數與 latency；單一來源失敗不會拖垮查詢 API。
-- SQLite schema v2 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap；process 重啟後不會把排程狀態歸零。
+- SQLite schema v3 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，並以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化；process 重啟後不會把排程或 change cursor truth 歸零。
 - 可使用 ETag／Last-Modified 時送出 conditional GET；HTTP 304 視為來源成功但不建立重複 Document。
 - freshness 同時提供全域與 politics／technology／finance／hazards 分領域 coverage。
-- `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、source health 與 collector API。
+- `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 consumer contract 為 `1.1`。
+- `/mcp` 提供 loopback-only、read-only 的 Atlas tools/resources；REST 與 MCP 共用同一個 backend capability layer，不各自計算 freshness、coverage 或 verification。
 - 首頁是 newsroom-first 版面，顯示本期頭條、live desk、最新報導、四領域 desks、搜尋與資料缺口；事件與 Story 詳情可直接回到原始證據。
 - `/atlas.html` 是獨立全屏情報地圖；只有具備可驗證座標的事件會出現在地圖上，並可跳到對應事件卡片。
 - `/api/dispatch` 提供 AI handoff brief、分類統計、watchlist、source 狀態與 normalized event highlights。
@@ -102,6 +103,7 @@ npm start
 
 ```text
 GET  /api/v1/health
+GET  /api/v1/profiles
 GET  /api/v1/domains
 GET  /api/v1/freshness
 GET  /api/v1/freshness?domain=hazards
@@ -115,12 +117,57 @@ GET  /api/v1/events/:id
 GET  /api/v1/entities
 GET  /api/v1/entities/:id/events
 GET  /api/v1/search?q=...
-GET  /api/v1/brief
+GET  /api/v1/brief?profile=brief_compact_v1
+GET  /api/v1/changes?cursor=...&domain=politics
 GET  /api/v1/collector
 POST /api/v1/collect?source=gdacs-events  (loopback only；scheduler 啟用時回傳 202 queued)
 ```
 
 列表支援 bounded `limit=1..200` 與 `cursor`。依資源可用 `domain`、`source`、`document_type`、`event_type`、`severity`、`verification`、`lifecycle`、`country`、`entity`、`from`、`to`、`q` 篩選。錯誤固定回傳 `{ "error": { "code", "message" } }`。
+
+Consumer profiles 由 `/api/v1/profiles` 發布，目前包含：
+
+- `brief_compact_v1`：Kuro 與一般 agent 的短摘要。
+- `change_feed_v1`：可保存 cursor、可去重的 Story/Event 變化。
+- `story_detail_v1`：Story 與 compact Event。
+- `evidence_pack_v1`：OMI／分析 consumer 使用的較完整 evidence。
+- `source_status_v1`、`latest_events_v1`、`search_results_v1`、`domain_registry_v1`。
+
+在 REST 可分別用 `/events?profile=latest_events_v1`、`/search?profile=search_results_v1`、`/stories/:id?profile=story_detail_v1`、`/sources?profile=source_status_v1` 與 `/domains?profile=domain_registry_v1` 取得和 MCP 相同的投影。
+
+`/api/v1/changes` 的 cursor 是 opaque 且綁定當次 `domain`／`change_type`。續接時必須帶回相同 filters；若要只接收之後的新變化，可先用 `cursor=now` 取得 head cursor。Kuro 的 `last_cursor`、安靜時間與 delivery log 仍由 Kuro 保存，Atlas 不會因讀取 change feed 自動發通知。
+
+從 schema v1/v2 升級到 v3 時不會合成過去不存在的 update history；既有 Story 的目前狀態可由 brief/story API 取得，change feed 只會記錄 v3 上線後發生的 material changes。
+
+## MCP
+
+本機 MCP endpoint：
+
+```text
+http://127.0.0.1:8790/mcp
+```
+
+目前 tools：
+
+```text
+atlas.latest
+atlas.search
+atlas.story.get
+atlas.brief
+atlas.changes
+atlas.sources.status
+```
+
+目前 resources：
+
+```text
+atlas://domains
+atlas://sources/status
+atlas://brief/latest
+atlas://stories/{storyId}
+```
+
+Transport 支援 MCP `2026-07-28` 的 per-request flow，也保留 `2025-11-25`／`2025-06-18` legacy stateless requests。端點會拒絕非 loopback client 與非 localhost Host/Origin；它沒有 refresh、backfill、delete、publish、notify 或任意 URL fetch 工具。這只證明 Atlas 本機 endpoint 可用，不表示 Kuro、OMI、ChatGPT connector 或 Control Center 已完成設定與採用。
 
 以下 legacy API 保留給目前前端，由 canonical Event 即時投影，不會在 GET 時抓外部來源：
 
@@ -249,13 +296,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-atlas-logo
 - 尚未做完整 geocoding；沒有可靠座標的事件仍保留在列表，但不會出現在地圖上。
 - scheduler truth 已持久化，但仍定位為本機單實例；SQLite lease 用於 crash recovery／防重入，不宣稱是多節點 distributed lock。
 - Windows 未登入或電腦關機期間仍無法抓取；重新登入後只補 provider 仍保留且 adapter 宣告可恢復的 bounded 資料。
-- Dispatch 還沒有排程寄送、webhook、MCP server。
+- Dispatch 還沒有排程寄送或 webhook；MCP 已提供 read-only 查詢，但尚未接入外部 consumer runtime。
 - 前端 newsroom 仍是單機基礎版，尚未加入登入、個人 watchlist、互動圖表或真正的即時行情。
 
 ## 下一步
 
 - 加入 scheduled dispatch：email、webhook、chat tools。
-- 加入 MCP server，讓其他 AI agent 直接查詢最新 brief 與 source-backed context。
+- 以 Kuro 與 OMI 各一條 read-only adapter 完成實際 runtime adoption proof，並分別驗證 stale／partial／failure state。
 - 為 key-gated adapters 配置合法憑證／識別，逐一跑 bounded live acceptance 與 terms review。
 - 增加 correction／retraction、malformed payload、rate-limit 與 adapter fixture coverage。
 - 加入可選 LLM-backed analysis，保留目前 no-key public source foundation。

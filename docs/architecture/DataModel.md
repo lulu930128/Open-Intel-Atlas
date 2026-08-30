@@ -152,7 +152,36 @@ Story status 可包含 `developing`、`stable`、`corrected`、`disputed`、`ret
 - `event_evidence.stance` 至少支援 `supporting`、`disputing`、`context`。
 - 一個 Story 可包含多個 Event；例如警報發布、升級、登陸與解除是不同 timeline items。
 
-## 7. Source independence
+## 7. Durable Story Update contract
+
+Schema v3 以 `stories.version` 與 append-only `story_updates.sequence` 表達 consumer 可觀察的語意變化。Event state、Story version 與 update row 在同一 SQLite transaction 內提交；重抓相同 material state 不增加 version。
+
+```json
+{
+  "id": "change_...",
+  "sequence": 42,
+  "story_id": "story_...",
+  "event_id": "event_...",
+  "story_version": 3,
+  "change_type": "verification_changed",
+  "primary_domain": "politics",
+  "verification_status": "multi_source",
+  "importance": {
+    "level": "medium",
+    "reason_codes": ["VERIFICATION_CHANGED", "EVIDENCE_CHANGED"]
+  },
+  "previous_state": {},
+  "current_state": {},
+  "evidence_ids": ["doc_..."],
+  "occurred_at": "2026-08-23T08:10:00Z"
+}
+```
+
+`change_type` 可表達 create/update、evidence added、verification/severity change、escalated/resolved、corrected/disputed/retracted。這些欄位保存可承載的 contract；只有 pipeline 實際辨識到對應 canonical state 時才會產生，不代表完整 correction NLP 已完成。
+
+`/api/v1/changes` 對外使用 opaque cursor，不暴露 sequence 作為 consumer contract。Cursor 同時保存 filter scope，避免從 politics cursor 改查 hazards 時靜默漏掉資料。現階段不清除 update history；未來加入 retention 前必須先定義 `cursor_expired` 與 snapshot resync。
+
+## 8. Source independence
 
 `independent_source_count` 不能直接等於 Document 數量。初期至少考慮：
 
@@ -163,7 +192,7 @@ Story status 可包含 `developing`、`stable`、`corrected`、`disputed`、`ret
 
 無法判定獨立性時使用 `unknown`，不要猜成獨立。
 
-## 8. Freshness 與 coverage envelope
+## 9. Freshness 與 coverage envelope
 
 每個 query response 可聚合：
 
@@ -193,7 +222,7 @@ Story status 可包含 `developing`、`stable`、`corrected`、`disputed`、`ret
 
 空 `data` 可能代表真的沒有結果，也可能代表 missing/failed coverage；consumer 必須能從 envelope 分辨。
 
-## 9. Migration 原則
+## 10. Migration 原則
 
 - 先 dual-read 或 compatibility projection，不直接刪除 legacy DB。
 - migration 每批記錄 input count、output count、skipped count、warning 與 checksum。

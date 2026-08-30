@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -75,6 +76,7 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const stats = runtime.store.getStats();
   assert.equal(stats.documents, 3);
   assert.equal(stats.stories, 2);
+  assert.equal(stats.story_updates, 2, "new Story plus corroboration must produce two durable semantic changes");
   assert.equal(stats.events, 1, "market observation marked ineligible must not become an event");
 
   const storedEvent = runtime.store.listEvents({ limit: 10 }).items[0];
@@ -88,8 +90,8 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
   assert.equal(health.version, "1.1.0");
-  assert.equal(health.contract_version, "1.0");
-  assert.equal(health.storage.schema_version, 2);
+  assert.equal(health.contract_version, "1.1");
+  assert.equal(health.storage.schema_version, 3);
   assert.equal(health.storage.events, 1);
   assert.equal(health.coverage.status, "full");
   assert.equal("db_file" in health.storage, false, "public health response must not expose local paths");
@@ -99,6 +101,15 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(eventsResponse.status, 200);
   assert.equal(events.data.length, 1);
   assert.equal(events.pagination.count, 1);
+
+  const profiledEventsResponse = await fetch(`${baseUrl}/api/v1/events?profile=latest_events_v1&domain=politics&limit=5`);
+  const profiledEvents = await profiledEventsResponse.json();
+  assert.equal(profiledEventsResponse.status, 200);
+  assert.equal(profiledEvents.profile, "latest_events_v1");
+  assert.deepEqual(
+    profiledEvents.data[0].evidence_ids.sort(),
+    runtime.store.getEvent(storedEvent.id).evidence.map((evidence) => evidence.id).sort()
+  );
 
   const domainsResponse = await fetch(`${baseUrl}/api/v1/domains`);
   const domains = await domainsResponse.json();
@@ -116,6 +127,144 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const detail = await detailResponse.json();
   assert.equal(detailResponse.status, 200);
   assert.equal(detail.data.evidence.length, 2);
+
+  const changesResponse = await fetch(`${baseUrl}/api/v1/changes?domain=politics&limit=10`);
+  const changes = await changesResponse.json();
+  assert.equal(changesResponse.status, 200);
+  assert.equal(changes.profile, "change_feed_v1");
+  assert.deepEqual(changes.data.map((change) => change.change_type), ["story_created", "verification_changed"]);
+  assert.equal(changes.data[1].story_version, 2);
+  assert.ok(changes.data[1].importance.reason_codes.includes("EVIDENCE_CHANGED"));
+  assert.equal(changes.pagination.has_more, false);
+  assert.ok(changes.pagination.next_cursor);
+
+  const caughtUpResponse = await fetch(
+    `${baseUrl}/api/v1/changes?domain=politics&cursor=${encodeURIComponent(changes.pagination.next_cursor)}`
+  );
+  const caughtUp = await caughtUpResponse.json();
+  assert.equal(caughtUpResponse.status, 200);
+  assert.deepEqual(caughtUp.data, []);
+
+  const invalidCursorResponse = await fetch(`${baseUrl}/api/v1/changes?cursor=not-a-cursor`);
+  const invalidCursor = await invalidCursorResponse.json();
+  assert.equal(invalidCursorResponse.status, 400);
+  assert.equal(invalidCursor.error.code, "invalid_cursor");
+
+  const mismatchedCursorResponse = await fetch(
+    `${baseUrl}/api/v1/changes?domain=hazards&cursor=${encodeURIComponent(changes.pagination.next_cursor)}`
+  );
+  const mismatchedCursor = await mismatchedCursorResponse.json();
+  assert.equal(mismatchedCursorResponse.status, 400);
+  assert.equal(mismatchedCursor.error.code, "cursor_scope_mismatch");
+
+  const profilesResponse = await fetch(`${baseUrl}/api/v1/profiles`);
+  const profiles = await profilesResponse.json();
+  assert.equal(profilesResponse.status, 200);
+  assert.ok(profiles.data.some((profile) => profile.id === "brief_compact_v1"));
+
+  const invalidProfileResponse = await fetch(`${baseUrl}/api/v1/sources?profile=unknown_profile`);
+  const invalidProfile = await invalidProfileResponse.json();
+  assert.equal(invalidProfileResponse.status, 400);
+  assert.equal(invalidProfile.error.code, "invalid_profile");
+
+  const briefResponse = await fetch(`${baseUrl}/api/v1/brief?profile=brief_compact_v1&domain=politics`);
+  const brief = await briefResponse.json();
+  assert.equal(briefResponse.status, 200);
+  assert.equal(brief.profile, "brief_compact_v1");
+  assert.ok(brief.data.generated_at, "brief data keeps the legacy v1 generated_at field");
+  assert.equal(brief.data.highlights[0].id, storedEvent.id);
+  assert.equal(brief.data.highlights[0].domain, "politics", "compact profile keeps the v1 brief domain alias");
+  assert.equal(typeof brief.data.highlights[0].confidence, "number", "compact profile keeps the v1 confidence field");
+  assert.equal(brief.coverage.status, "full");
+
+  const discoverResponse = await modernMcpRequest(baseUrl, "server/discover");
+  assert.equal(discoverResponse.status, 200);
+  const discover = await readMcpJson(discoverResponse);
+  assert.deepEqual(discover.result.supportedVersions, ["2026-07-28"]);
+  assert.equal(discover.result.resultType, "complete");
+
+  const toolsResponse = await modernMcpRequest(baseUrl, "tools/list");
+  assert.equal(toolsResponse.status, 200);
+  const tools = await readMcpJson(toolsResponse);
+  const toolNames = tools.result.tools.map((tool) => tool.name);
+  assert.deepEqual(toolNames, [
+    "atlas.latest",
+    "atlas.search",
+    "atlas.story.get",
+    "atlas.brief",
+    "atlas.changes",
+    "atlas.sources.status"
+  ]);
+  assert.ok(tools.result.tools.every((tool) => tool.annotations.readOnlyHint === true));
+
+  const mcpBriefResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.brief", arguments: { domain: "politics", limit: 5 } },
+    "atlas.brief"
+  );
+  assert.equal(mcpBriefResponse.status, 200);
+  const mcpBrief = await readMcpJson(mcpBriefResponse);
+  assert.equal(mcpBrief.result.structuredContent.profile, "brief_compact_v1");
+  assert.equal(mcpBrief.result.structuredContent.data.highlights[0].id, storedEvent.id);
+  assert.equal(mcpBrief.result.structuredContent.coverage.status, "full");
+
+  const invalidMcpCursorResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.changes", arguments: { cursor: "not-a-cursor" } },
+    "atlas.changes"
+  );
+  assert.equal(invalidMcpCursorResponse.status, 200);
+  const invalidMcpCursor = await readMcpJson(invalidMcpCursorResponse);
+  assert.equal(invalidMcpCursor.result.isError, true);
+  assert.equal(invalidMcpCursor.result.structuredContent.error.code, "invalid_cursor");
+
+  const storyId = runtime.store.listStories({ limit: 10 }).items[0].id;
+  const storyResourceResponse = await modernMcpRequest(
+    baseUrl,
+    "resources/read",
+    { uri: `atlas://stories/${storyId}` },
+    `atlas://stories/${storyId}`
+  );
+  assert.equal(storyResourceResponse.status, 200);
+  const storyResource = await readMcpJson(storyResourceResponse);
+  const resourcePayload = JSON.parse(storyResource.result.contents[0].text);
+  assert.equal(resourcePayload.profile, "story_detail_v1");
+  assert.equal(resourcePayload.data.story.id, storyId);
+  assert.ok(resourcePayload.data.story.summary, "story profile must include a representative source-backed summary");
+
+  const rejectedOriginResponse = await modernMcpRequest(baseUrl, "tools/list", {}, undefined, {
+    Origin: "https://example.test"
+  });
+  assert.equal(rejectedOriginResponse.status, 403);
+
+  const rejectedHostResponse = await rawMcpRequest(baseUrl, "example.test");
+  assert.equal(rejectedHostResponse.status, 403);
+
+  const legacyInitializeResponse = await legacyMcpRequest(baseUrl, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "atlas-regression", version: "1.0.0" }
+    }
+  });
+  assert.equal(legacyInitializeResponse.status, 200);
+  const legacyInitialize = await readMcpJson(legacyInitializeResponse);
+  assert.equal(legacyInitialize.result.protocolVersion, "2025-11-25");
+
+  const legacyToolsResponse = await legacyMcpRequest(baseUrl, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {}
+  });
+  assert.equal(legacyToolsResponse.status, 200);
+  const legacyTools = await readMcpJson(legacyToolsResponse);
+  assert.ok(legacyTools.result.tools.some((tool) => tool.name === "atlas.changes"));
 
   const searchResponse = await fetch(`${baseUrl}/api/v1/search?q=infrastructure`);
   const search = await searchResponse.json();
@@ -136,6 +285,18 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const staticResponse = await fetch(`${baseUrl}/`);
   assert.equal(staticResponse.status, 200);
   assert.match(staticResponse.headers.get("content-type"), /^text\/html/);
+
+  await runtime.close();
+  const reopenedRuntime = createAtlasRuntime({ config, registry });
+  try {
+    assert.equal(reopenedRuntime.store.getStats().story_updates, 2, "semantic change log must survive a runtime restart");
+    const persistedChanges = reopenedRuntime.capabilities.changes({ limit: 10 });
+    assert.deepEqual(persistedChanges.data.map((change) => change.id), changes.data.map((change) => change.id));
+    const persistedCatchUp = reopenedRuntime.capabilities.changes({ domain: "politics", cursor: changes.pagination.next_cursor });
+    assert.deepEqual(persistedCatchUp.data, [], "a persisted cursor must resume without replaying acknowledged changes");
+  } finally {
+    await reopenedRuntime.close();
+  }
 });
 
 function fixtureSource() {
@@ -211,4 +372,79 @@ function fixtureSource() {
     }
   };
   return source;
+}
+
+async function modernMcpRequest(baseUrl, method, params = {}, name, extraHeaders = {}) {
+  return fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": method,
+      ...(name ? { "Mcp-Name": name } : {}),
+      ...extraHeaders
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${method}-${name || "request"}`,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientInfo": { name: "atlas-regression", version: "1.0.0" }
+        }
+      }
+    })
+  });
+}
+
+async function legacyMcpRequest(baseUrl, body) {
+  return fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+async function readMcpJson(response) {
+  const text = await response.text();
+  if (response.headers.get("content-type")?.includes("application/json")) return JSON.parse(text);
+  const data = text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .find(Boolean);
+  assert.ok(data, `MCP response did not contain a JSON or SSE data payload: ${text.slice(0, 200)}`);
+  return JSON.parse(data);
+}
+
+function rawMcpRequest(baseUrl, hostHeader) {
+  const target = new URL("/mcp", baseUrl);
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          Host: hostHeader,
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json"
+        }
+      },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve({ status: response.statusCode }));
+      }
+    );
+    request.once("error", reject);
+    request.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }));
+  });
 }

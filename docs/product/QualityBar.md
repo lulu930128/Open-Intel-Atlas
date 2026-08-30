@@ -25,7 +25,7 @@
 - API 使用 major version、bounded pagination、predictable error envelope 與 contract test。
 - scheduler 與 HTTP read path 解耦；查詢不因單一 client request 觸發無界 provider I/O。
 - secrets 只由環境變數或安全設定注入；log、API error 與 raw artifact 不得洩漏 secrets。
-- MCP adapter 保持薄且 read-only 起步；protocol 驗證包含 `initialize → tools/list → representative call/resource read`。
+- MCP adapter 保持薄且 read-only 起步；現行協定驗證包含 `server/discover → tools/list → representative call/resource read`，legacy 相容面另驗證 `initialize` 與 stateless request。
 
 ## 資料與可信度標準
 

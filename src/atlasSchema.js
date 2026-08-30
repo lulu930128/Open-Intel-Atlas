@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export function initializeAtlasSchema(db) {
   db.exec(`
@@ -134,6 +134,7 @@ export function initializeAtlasSchema(db) {
       id TEXT PRIMARY KEY,
       canonical_title TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('emerging', 'active', 'stale', 'merged', 'closed')),
+      version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
       first_seen_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL,
       document_count INTEGER NOT NULL DEFAULT 0,
@@ -260,6 +261,34 @@ export function initializeAtlasSchema(db) {
       FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS story_updates (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      story_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      story_version INTEGER NOT NULL CHECK (story_version >= 1),
+      change_type TEXT NOT NULL CHECK (change_type IN (
+        'story_created', 'story_updated', 'evidence_added', 'verification_changed',
+        'severity_changed', 'event_escalated', 'event_resolved', 'story_corrected',
+        'story_disputed', 'story_retracted'
+      )),
+      primary_domain TEXT NOT NULL CHECK (primary_domain IN ('politics', 'technology', 'finance', 'hazards')),
+      event_severity TEXT NOT NULL CHECK (event_severity IN ('low', 'medium', 'high', 'critical')),
+      verification_status TEXT NOT NULL CHECK (verification_status IN (
+        'unverified', 'single_source', 'multi_source', 'primary_source_confirmed',
+        'official_confirmed', 'disputed', 'corrected', 'retracted'
+      )),
+      previous_state_json TEXT,
+      current_state_json TEXT NOT NULL,
+      reason_codes_json TEXT NOT NULL,
+      evidence_ids_json TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (story_id, story_version),
+      FOREIGN KEY (story_id) REFERENCES stories(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+      FOREIGN KEY (event_id) REFERENCES events(id) ON UPDATE CASCADE ON DELETE RESTRICT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_source_runs_source_started ON source_runs(source_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_source_runs_status ON source_runs(status, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_source_schedule_due ON source_schedule_state(next_due_at, lease_expires_at);
@@ -279,6 +308,9 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_entity_aliases_alias ON entity_aliases(alias);
     CREATE INDEX IF NOT EXISTS idx_event_entities_entity ON event_entities(entity_id, event_id);
     CREATE INDEX IF NOT EXISTS idx_event_locations_country ON event_locations(country_code, event_id);
+    CREATE INDEX IF NOT EXISTS idx_story_updates_story_version ON story_updates(story_id, story_version DESC);
+    CREATE INDEX IF NOT EXISTS idx_story_updates_domain_sequence ON story_updates(primary_domain, sequence);
+    CREATE INDEX IF NOT EXISTS idx_story_updates_type_sequence ON story_updates(change_type, sequence);
   `);
 
   const now = new Date().toISOString();
@@ -286,6 +318,8 @@ export function initializeAtlasSchema(db) {
   migrateSourcesV2(db);
   migrateSourceRunsV2(db);
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(2, now);
+  migrateStoriesV3(db);
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(3, now);
 }
 
 function migrateSourcesV2(db) {
@@ -309,5 +343,12 @@ function migrateSourceRunsV2(db) {
   ];
   for (const [name, definition] of additions) {
     if (!columns.has(name)) db.exec(`ALTER TABLE source_runs ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+function migrateStoriesV3(db) {
+  const columns = new Set(db.prepare("PRAGMA table_info(stories)").all().map((column) => column.name));
+  if (!columns.has("version")) {
+    db.exec("ALTER TABLE stories ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)");
   }
 }

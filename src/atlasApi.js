@@ -1,5 +1,9 @@
 import { APP_NAME, APP_VERSION } from "./config.js";
 import { DOMAIN_DEFINITIONS, DOMAIN_IDS } from "./atlasDomains.js";
+import { CapabilityError, CONSUMER_CONTRACT_VERSION } from "./atlasCapabilities.js";
+import { queryState } from "./atlasQueryState.js";
+
+export { queryState } from "./atlasQueryState.js";
 
 const SEVERITIES = new Set(["low", "medium", "high", "critical"]);
 const LIFECYCLES = new Set(["emerging", "ongoing", "resolved", "superseded", "cancelled"]);
@@ -31,12 +35,25 @@ export async function handleV1Api(request, response, requestUrl, context) {
     }, context);
   }
 
+  if (request.method === "GET" && pathname === "/api/v1/profiles") {
+    return sendJson(response, context.capabilities.profiles());
+  }
+
   if (request.method === "GET" && pathname === "/api/v1/domains") {
+    if (requestUrl.searchParams.has("profile")) {
+      return sendJson(response, context.capabilities.domains({ profile: optional(requestUrl.searchParams.get("profile")) }));
+    }
     return sendV1Json(response, { data: DOMAIN_DEFINITIONS }, context);
   }
 
   if (request.method === "GET" && pathname === "/api/v1/sources") {
     const domain = parseDomain(requestUrl.searchParams.get("domain"));
+    if (requestUrl.searchParams.has("profile")) {
+      return sendJson(response, context.capabilities.sourceStatus({
+        domain,
+        profile: optional(requestUrl.searchParams.get("profile"))
+      }));
+    }
     const sources = context.store.listSources();
     return sendV1Json(response, {
       data: domain ? sources.filter((source) => source.domains.includes(domain)) : sources,
@@ -68,11 +85,19 @@ export async function handleV1Api(request, response, requestUrl, context) {
 
   const storyId = pathId(pathname, "/api/v1/stories/");
   if (request.method === "GET" && storyId !== null) {
+    const profile = optional(requestUrl.searchParams.get("profile"));
+    if (profile) return sendJson(response, context.capabilities.storyGet({ story_id: storyId, profile }));
     return sendResource(response, context.store.getStory(storyId), "story", context);
   }
 
   if (request.method === "GET" && pathname === "/api/v1/events") {
     const filters = eventFilters(requestUrl.searchParams);
+    if (requestUrl.searchParams.has("profile")) {
+      return sendJson(response, context.capabilities.latest({
+        ...filters,
+        profile: optional(requestUrl.searchParams.get("profile"))
+      }));
+    }
     return sendPage(response, context.store.listEvents(filters), context, { domain: filters.domain });
   }
 
@@ -116,6 +141,13 @@ export async function handleV1Api(request, response, requestUrl, context) {
     if (!query || query.length < 2) {
       throw new ApiError(400, "invalid_query", "q must contain at least 2 characters");
     }
+    if (requestUrl.searchParams.has("profile")) {
+      return sendJson(response, context.capabilities.search({
+        q: query,
+        limit: parseLimit(requestUrl.searchParams.get("limit"), 30),
+        profile: optional(requestUrl.searchParams.get("profile"))
+      }));
+    }
     return sendV1Json(
       response,
       { data: context.store.search(query, parseLimit(requestUrl.searchParams.get("limit"), 30)) },
@@ -125,9 +157,21 @@ export async function handleV1Api(request, response, requestUrl, context) {
 
   if (request.method === "GET" && pathname === "/api/v1/brief") {
     const filters = eventFilters(requestUrl.searchParams);
-    const events = context.store.listEvents({ ...filters, limit: 12 }).items;
-    const sources = context.store.listSources();
-    return sendV1Json(response, { data: buildBrief(events, sources) }, context, 200, { domain: filters.domain });
+    return sendJson(response, context.capabilities.brief({
+      ...filters,
+      limit: requestUrl.searchParams.has("limit") ? filters.limit : 12,
+      profile: optional(requestUrl.searchParams.get("profile")) || "brief_compact_v1"
+    }));
+  }
+
+  if (request.method === "GET" && pathname === "/api/v1/changes") {
+    return sendJson(response, context.capabilities.changes({
+      domain: parseDomain(requestUrl.searchParams.get("domain")),
+      change_type: optional(requestUrl.searchParams.get("change_type")),
+      cursor: optional(requestUrl.searchParams.get("cursor")),
+      limit: parseLimit(requestUrl.searchParams.get("limit")),
+      profile: optional(requestUrl.searchParams.get("profile")) || "change_feed_v1"
+    }));
   }
 
   if (request.method === "GET" && pathname === "/api/v1/collector") {
@@ -171,14 +215,14 @@ export async function handleV1Api(request, response, requestUrl, context) {
 }
 
 export function handleApiError(response, error) {
-  if (error instanceof ApiError) {
-    sendJson(response, { contract_version: "1.0", error: { code: error.code, message: error.message } }, error.status);
+  if (error instanceof ApiError || error instanceof CapabilityError) {
+    sendJson(response, { contract_version: CONSUMER_CONTRACT_VERSION, error: { code: error.code, message: error.message } }, error.status);
     return;
   }
   console.error(error);
   sendJson(
     response,
-    { contract_version: "1.0", error: { code: "internal_error", message: "Internal server error" } },
+    { contract_version: CONSUMER_CONTRACT_VERSION, error: { code: "internal_error", message: "Internal server error" } },
     500
   );
 }
@@ -306,36 +350,12 @@ function publicStats(stats) {
   return safeStats;
 }
 
-function buildBrief(events, sources) {
-  const byDomain = Object.fromEntries([...DOMAIN_IDS].map((domain) => [domain, 0]));
-  for (const event of events) byDomain[event.primary_domain] = (byDomain[event.primary_domain] || 0) + 1;
-  const healthy = sources.filter((source) => ["healthy", "degraded"].includes(source.health.status)).length;
-  return {
-    generated_at: new Date().toISOString(),
-    event_count: events.length,
-    source_health: { usable: healthy, total: sources.length },
-    domain_counts: byDomain,
-    highlights: events.slice(0, 8).map((event) => ({
-      id: event.id,
-      title: event.title,
-      summary: event.summary,
-      event_type: event.event_type,
-      domain: event.primary_domain,
-      severity: event.event_severity,
-      verification_status: event.verification_status,
-      confidence: event.confidence,
-      last_updated_at: event.last_updated_at,
-      representative_url: event.representative_url
-    }))
-  };
-}
-
 function sendV1Json(response, payload, context, statusCode = 200, scope = {}) {
   const state = queryState(context, scope);
   return sendJson(
     response,
     {
-      contract_version: "1.0",
+      contract_version: CONSUMER_CONTRACT_VERSION,
       generated_at: new Date().toISOString(),
       ...payload,
       freshness: state.freshness,
@@ -344,85 +364,6 @@ function sendV1Json(response, payload, context, statusCode = 200, scope = {}) {
     },
     statusCode
   );
-}
-
-export function queryState(context, scope = {}) {
-  const allSources = context.store.listSources();
-  const sources = scope.domain ? allSources.filter((source) => source.domains.includes(scope.domain)) : allSources;
-  const enabled = sources.filter((source) => source.enabled);
-  const counts = {
-    healthy: enabled.filter((source) => source.health.status === "healthy").length,
-    degraded: enabled.filter((source) => source.health.status === "degraded").length,
-    failed: enabled.filter((source) => source.health.status === "failed").length,
-    unknown: enabled.filter((source) => source.health.status === "unknown").length,
-    disabled: sources.filter((source) => !source.enabled).length,
-    current: enabled.filter((source) => source.health.freshness_status === "current").length,
-    stale: enabled.filter((source) => source.health.freshness_status === "stale").length,
-    missing: enabled.filter((source) => source.health.freshness_status === "missing").length
-  };
-  const successful = enabled.filter((source) => Boolean(source.health.last_success_at)).length;
-  const coverageStatus =
-    enabled.length === 0 || successful === 0
-      ? "missing"
-      : counts.failed + counts.stale + counts.unknown + counts.missing > 0
-        ? "partial"
-        : "full";
-  const sourceSuccessTimes = enabled.map((source) => Date.parse(source.health.last_success_at || "")).filter(Number.isFinite);
-  const warnings = [];
-  for (const source of enabled) {
-    if (["failed", "unknown"].includes(source.health.status)) {
-      warnings.push({
-        code: `SOURCE_${source.health.status.toUpperCase()}`,
-        source_id: source.id,
-        message: source.health.last_error || "No successful collection is available."
-      });
-    }
-    if (source.health.freshness_status === "stale") {
-      warnings.push({
-        code: "SOURCE_STALE",
-        source_id: source.id,
-        message: `Last success is older than twice the ${source.cadence_ms} ms cadence.`
-      });
-    }
-    if (["recoverable_partial", "unrecoverable"].includes(source.health.last_gap_status)) {
-      warnings.push({
-        code: source.health.last_gap_status === "unrecoverable" ? "SOURCE_GAP_UNRECOVERABLE" : "SOURCE_CATCHUP_TRUNCATED",
-        source_id: source.id,
-        message:
-          source.health.last_gap_status === "unrecoverable"
-            ? "The provider only exposes latest data; part of the offline gap may be unavailable."
-            : "Catch-up was bounded by the configured maximum window."
-      });
-    }
-  }
-  const domainCoverage = scope.domain
-    ? undefined
-    : Object.fromEntries(
-        [...DOMAIN_IDS].map((domain) => {
-          const state = queryState(context, { domain });
-          return [domain, { freshness: state.freshness, coverage: state.coverage }];
-        })
-      );
-  return {
-    freshness: {
-      status: successful === 0 ? "missing" : counts.stale + counts.missing > 0 ? "stale" : "current",
-      as_of: sourceSuccessTimes.length ? new Date(Math.max(...sourceSuccessTimes)).toISOString() : null,
-      data_as_of: context.store.getDataAsOf(scope.domain || null)
-    },
-    coverage: {
-      status: coverageStatus,
-      expected_sources: enabled.length,
-      successful_sources: successful,
-      current_sources: counts.current,
-      degraded_sources: counts.degraded,
-      stale_sources: counts.stale,
-      failed_sources: counts.failed,
-      unknown_sources: counts.unknown,
-      disabled_sources: counts.disabled
-    },
-    warnings,
-    ...(domainCoverage ? { domains: domainCoverage } : {})
-  };
 }
 
 function parseDomain(value) {

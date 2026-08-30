@@ -14,7 +14,7 @@ import { buildSourceRegistry } from "../src/atlasSourceRegistry.js";
 import { loadConfig } from "../src/config.js";
 import { createIntelDocument } from "../src/documents/normalize.js";
 
-test("schema v1 database upgrades to v2 without losing source runs", () => {
+test("schema v1 database upgrades to v3 without losing source runs", () => {
   withTempDatabase((dbPath) => {
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -47,14 +47,17 @@ test("schema v1 database upgrades to v2 without losing source runs", () => {
     legacy.close();
 
     const store = openAtlasStore(dbPath);
-    assert.equal(store.getStats().schema_version, 2);
+    assert.equal(store.getStats().schema_version, 3);
     assert.equal(store.getStats().source_runs, 1);
     assert.equal(store.db.prepare("SELECT status FROM source_runs WHERE id = ?").get("run:legacy").status, "success");
     const sourceColumns = store.db.prepare("PRAGMA table_info(sources)").all().map((column) => column.name);
     const runColumns = store.db.prepare("PRAGMA table_info(source_runs)").all().map((column) => column.name);
+    const storyColumns = store.db.prepare("PRAGMA table_info(stories)").all().map((column) => column.name);
     assert.ok(sourceColumns.includes("catchup_mode"));
     assert.ok(runColumns.includes("scheduler_owner"));
-    assert.equal(store.db.prepare("SELECT COUNT(*) count FROM schema_migrations WHERE version = 2").get().count, 1);
+    assert.ok(storyColumns.includes("version"));
+    assert.equal(store.db.prepare("SELECT COUNT(*) count FROM schema_migrations WHERE version = 3").get().count, 1);
+    assert.ok(store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_updates'").get());
     store.close();
   });
 });

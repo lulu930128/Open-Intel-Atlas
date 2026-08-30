@@ -10,7 +10,7 @@
 - 對外 versioned API 與 read-only-first MCP。
 - OMI、Kuro 與其他 agent 的一致資料供應。
 
-本文件同時描述目前實作與長期 target。2026-08-23 的 runtime 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event` canonical pipeline、SQLite schema v2 scheduler 與 `/api/v1/*`；MCP、public auth、多實例部署及完整 correction/retraction workflow 仍屬後續範圍。
+本文件同時描述目前實作與長期 target。2026-08-23 的 runtime 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event` canonical pipeline、SQLite schema v3 scheduler／durable change log、consumer contract `1.1` REST profiles 與 loopback read-only MCP；public auth、多實例部署、OMI/Kuro runtime adoption 及完整 correction/retraction workflow 仍屬後續範圍。
 
 ## 2. 架構原則
 
@@ -60,7 +60,7 @@ flowchart LR
 | Canonical Store | schema、migration、transactions、query indexes、audit lineage | SQLite WAL；達 gate 後再評估 PostgreSQL |
 | Query Service | search/filter/pagination、freshness/coverage、representation | backend capability layer |
 | REST API | public versioning、auth、rate limit、HTTP semantics | 同 backend 或獨立薄 transport |
-| MCP Adapter | 少量 read-only tools/resources，轉呼叫 Query/API | 獨立薄 adapter |
+| MCP Adapter | 少量 read-only tools/resources，轉呼叫 capability layer | 目前與 backend 同 process 的 `/mcp` 薄 transport；達隔離需求後可獨立部署 |
 | Web UI | operational briefing 與 evidence exploration | static/SPA；不得直連 provider |
 | Admin Plane | refresh/backfill/reprocess/source controls/audit | 與 public tools 分離、local trusted 起步 |
 
@@ -194,9 +194,9 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 詳細 contract 見 [對外介面與整合契約](ExternalInterfaces.md)。核心規則：
 
 - 使用 `/api/v1` major version 與 cursor pagination。
-- response 同時帶 `data`、`meta`、`freshness`、`coverage`、`warnings`。
+- v1/consumer profile response 同時帶 `contract_version`、`generated_at`、`data`、`freshness`、`coverage`、`warnings`；分頁資料另帶 `pagination`。
 - source status 與 partial result 不藏在自由文字 summary。
-- MCP 只轉呼叫 Query/API，第一版只提供 read-only capability。
+- MCP 只轉呼叫共用 capability layer，第一版只提供 read-only capability；modern stateless 與 legacy stateless transport 使用同一 canonical projection。
 - OMI 取得 external event evidence，不從 Atlas 接受交易結論。
 - Kuro 取得 compact facts/brief，不從 Atlas 接受 persona 或通知決策。
 
@@ -237,7 +237,7 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 - Canonical Story/Event pipeline 已上線，但 clustering、entity extraction、severity 與 confidence 仍是 versioned deterministic baseline，尚未接完整 NLP 或 correction/retraction timeline。
 - 自動測試已覆蓋 identity、dedupe、lineage、schema migration、lease/backoff、catch-up、304 與 domain freshness；malformed provider payload、rate-limit 與更多 adapter fixtures 仍需補強。
 - `src/dashboard.js` 仍提供 legacy dashboard projection；它不擁有 canonical Story/Event truth，也不由查詢路徑抓取 provider。
-- MCP、public auth、OMI/Kuro wiring 尚未實作。
+- Loopback read-only MCP 已實作並通過 local protocol smoke；public auth、tunnel/connector 與 OMI/Kuro wiring 尚未實作，不能由 endpoint 健康推論 consumer 已採用。
 - 需要逐來源完成 terms、attribution、redistribution 與 key-gated live acceptance，才能擴大到公網或第三方服務。
 
 ## 15. 待決策

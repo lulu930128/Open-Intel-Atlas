@@ -17,6 +17,7 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 | Method / Path | 用途 |
 | --- | --- |
 | `GET /api/v1/health` | process、DB/schema、readiness；不把所有 provider 短暫失敗等同 process unhealthy |
+| `GET /api/v1/profiles` | backend-owned representation profiles 與 consumer contract version |
 | `GET /api/v1/domains` | domain/topic registry 與顯示 metadata |
 | `GET /api/v1/freshness` | 全域或 domain-scoped freshness、coverage、gap warnings |
 | `GET /api/v1/sources` | source registry、last run、last success/failure、coverage |
@@ -27,6 +28,7 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 | `GET /api/v1/entities/{id}` | entity profile 與相關 stories/events |
 | `GET /api/v1/search` | bounded search；回傳 mixed result types 與 coverage |
 | `GET /api/v1/brief` | 可重現的 compact brief；帶 scope、as-of 與 evidence IDs |
+| `GET /api/v1/changes` | durable Story/Event change feed；opaque cursor 綁定 domain/change-type scope |
 | `POST /api/v1/admin/jobs` | trusted admin 的 bounded refresh/backfill/reprocess；不屬 public read surface |
 | `GET /api/v1/admin/jobs/{id}` | job progress、error、counts、audit |
 
@@ -49,13 +51,13 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 
 ```json
 {
-  "contract_version": "1.0",
+  "contract_version": "1.1",
+  "profile": "latest_events_v1",
+  "generated_at": "2026-08-23T08:10:00Z",
   "data": [],
-  "meta": {
-    "request_id": "req_...",
-    "generated_at": "2026-08-23T08:10:00Z",
-    "next_cursor": null,
-    "filters": {}
+  "pagination": {
+    "count": 0,
+    "next_cursor": null
   },
   "freshness": {
     "status": "current",
@@ -92,22 +94,24 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 | `atlas.search` | bounded search，回傳 story/event/document references |
 | `atlas.story.get` | 取得單一 Story 的 timeline、evidence、freshness 與 coverage |
 | `atlas.brief` | 取得可供 agent 使用、來源可追溯的 brief |
+| `atlas.changes` | 讀取可續接、可去重的 Story/Event change feed |
 | `atlas.sources.status` | 查詢 source health、last success 與 coverage gap |
 
 ### 3.2 Resources
 
 - `atlas://stories/{story_id}`
-- `atlas://briefs/{brief_id}`
+- `atlas://brief/latest`
 - `atlas://sources/status`
 - `atlas://domains`
 
 ### 3.3 邊界
 
-- MCP adapter 不直接連 SQLite、不呼叫 upstream source、不計算可信度。
+- `/mcp` transport 只呼叫與 REST 共用的 capability layer，不直接呼叫 store/provider，也不計算可信度。
 - 第一版不提供 delete、publish、notify、refresh-all 或任意 URL fetch。
 - refresh/backfill 若日後需要，作為 trusted admin capability，和 public tools 分開。
 - MCP response 保留 stable IDs、as-of、source links、freshness、coverage、warnings 與 contract version。
-- 完整驗證必須走 `initialize → retain session if transport requires → tools/list → representative tool call/resource read`。
+- MCP `2026-07-28` 完整驗證走 `server/discover → tools/list → representative tool call/resource read`；legacy 相容面另走 `initialize → tools/list`。本機 endpoint 的 transport 驗證不等於外部 host/connector 已採用。
+- 目前 `/mcp` 只接受 loopback，並驗證 localhost Host/Origin；public auth、tunnel 與多使用者不是這個邊界的一部分。
 
 ## 4. OMI 整合
 
@@ -155,8 +159,8 @@ OMI question / scheduled analysis
 
 ```text
 Kuro timer / user request
-  -> Kuro selects compact scope
-  -> Atlas /api/v1/brief?domain=... or MCP atlas.brief
+  -> Kuro resumes /api/v1/changes with its persisted cursor
+  -> Kuro selects relevant update IDs and reads brief/story through REST or MCP
   -> Kuro checks freshness + warnings + last delivered story IDs
   -> Kuro applies local notification/persona policy
   -> user-facing message links back to Atlas Story/source
@@ -166,21 +170,25 @@ Kuro timer / user request
 
 ## 6. Representation profiles
 
-通用 API 足以支援初期整合。若 payload 逐漸過大，可新增 server-owned、versioned profiles：
+目前通用 API 與 MCP 共用下列 server-owned、versioned profiles：
 
 - `brief_compact_v1`：Kuro／一般 agent 使用。
 - `evidence_pack_v1`：OMI／分析 agent 使用。
 - `story_detail_v1`：UI／研究使用。
+- `change_feed_v1`：Kuro 背景同步與其他 durable consumers。
+- `source_status_v1`、`latest_events_v1`、`search_results_v1`、`domain_registry_v1`：對應 bounded capability 投影。
 
 profile 只控制欄位與大小，不改變 evidence、verification 或權限。profile 名稱不是 authentication。
 
+Change cursor 是 opaque global sequence 加上 filter scope。Consumer 必須以相同 `domain`／`change_type` 續接；換 scope 時從新的 cursor 開始，不能把舊 cursor 當成通用時間戳。
+
 ## 7. 相容與採用策略
 
-1. 先建立 `/api/v1` contract tests 與 legacy projection mapping。
-2. UI 改讀 v1，但保留 feature flag 或 rollback path。
-3. 建立 MCP thin adapter 並完成 local protocol smoke。
-4. OMI 先採用單一 read-only evidence flow。
-5. Kuro 再採用 compact brief flow。
-6. 以 access log/contract version 確認 legacy consumer 歸零後，才討論移除舊 API。
+1. `已完成`：建立 `/api/v1` contract tests、legacy projection mapping、representation profiles 與 durable change feed。
+2. `已完成`：建立 read-only MCP transport 並完成 modern/legacy local protocol smoke。
+3. `進行中`：UI 逐步改讀 v1，保留既有 legacy projection 作 rollback path。
+4. `待完成`：OMI 採用單一 read-only evidence flow並驗證市場語意 ownership。
+5. `待完成`：Kuro 採用 change cursor + compact brief flow並驗證 persona/notification ownership。
+6. `待完成`：以 access log/contract version 確認 legacy consumer 歸零後，才討論移除舊 API。
 
 完成整合的證據不是「endpoint 存在」，而是 consumer runtime 實際讀到正確 contract，並在 stale/partial/failure state 下保持 truthful degradation。

@@ -5,7 +5,9 @@ import { pathToFileURL } from "node:url";
 import { buildDispatch } from "./analysis.js";
 import { handleApiError, handleV1Api, sendJson } from "./atlasApi.js";
 import { createCollector, startCollectorScheduler } from "./atlasCollector.js";
+import { createAtlasCapabilities } from "./atlasCapabilities.js";
 import { createHttpClient } from "./atlasHttp.js";
+import { createAtlasMcpEndpoint } from "./atlasMcp.js";
 import { buildSourceRegistry } from "./atlasSourceRegistry.js";
 import { openAtlasStore } from "./atlasStore.js";
 import { APP_NAME, APP_VERSION, loadConfig } from "./config.js";
@@ -20,10 +22,16 @@ export function createAtlasRuntime(options = {}) {
   const collector = options.collector || createCollector({ store, registry, http, config });
   const scheduler = options.scheduler || startCollectorScheduler({ collector, registry, store, config });
   const context = { config, registry, store, http, collector, scheduler };
+  context.capabilities = options.capabilities || createAtlasCapabilities(context);
+  context.mcp = options.mcp || createAtlasMcpEndpoint(context);
 
   const server = createServer(async (request, response) => {
     try {
       const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+      if (requestUrl.pathname === "/mcp") {
+        await context.mcp.handle(request, response);
+        return;
+      }
       if (await handleV1Api(request, response, requestUrl, context)) return;
       if (await handleLegacyApi(request, response, requestUrl, context)) return;
       if (request.method === "GET") return serveStatic(requestUrl.pathname, response, config.publicDir);
@@ -52,6 +60,7 @@ export function createAtlasRuntime(options = {}) {
       closed = true;
       await scheduler.stop();
       if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
+      await context.mcp.close();
       store.close();
     }
   };
