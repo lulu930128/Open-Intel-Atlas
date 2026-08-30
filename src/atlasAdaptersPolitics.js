@@ -37,7 +37,8 @@ export const politicsSources = [
     homepage: "https://www.bbc.com/news/world",
     docsUrl: "https://feeds.bbci.co.uk/news/world/rss.xml",
     attribution: "BBC News",
-    policyNote: "Store metadata and short excerpts only; link to the original article.",
+    policyNote: "Store metadata and short excerpts only; link to the original article. Feed thumbnails are displayable only for the explicitly selected personal, non-commercial runtime context.",
+    mediaPolicy: bbcNewsMediaPolicy,
     cadenceMs: 15 * 60 * 1000,
     timeoutMs: 12000,
     defaultEnabled: true,
@@ -87,6 +88,31 @@ export const politicsSources = [
   }
 ];
 
+function bbcNewsMediaPolicy(config) {
+  const common = {
+    version: "bbc-news-rss-personal-v1",
+    rights_class: "licensed",
+    display_authorization: "public_terms",
+    allowed_hosts: ["ichef.bbci.co.uk"],
+    terms_url: "https://downloads.bbc.co.uk/usingthebbc/bbc_terms_of_use_31March2022english.pdf",
+    reviewed_at: "2026-08-30T07:30:00.000Z"
+  };
+
+  if (config.mediaUsageContext !== "personal_noncommercial") {
+    return {
+      ...common,
+      default_display_policy: "candidate",
+      reason: "BBC News RSS thumbnails require an explicit personal, non-commercial runtime context; commercial or unreviewed use remains candidate-only."
+    };
+  }
+
+  return {
+    ...common,
+    default_display_policy: "remote_embed",
+    reason: "BBC News RSS thumbnail displayed unchanged from the feed on this local personal, non-commercial runtime, with BBC News attribution and an original-article link."
+  };
+}
+
 async function fetchGdelt({ source, http, catchup, now }) {
   const startedAt = now();
   const url = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
@@ -117,6 +143,9 @@ async function fetchGdelt({ source, http, catchup, now }) {
         publisherKey: article.domain || null,
         domains: [{ domain: "politics", confidence: 0.65 }],
         tags: ["gdelt", "news", "discovery"],
+        media: article.socialimage
+          ? [{ url: article.socialimage, origin: "provider", role: "main", attribution: article.domain || null }]
+          : [],
         rawMetadata: {
           sourcecountry: article.sourcecountry || null,
           socialimage: article.socialimage || null,
@@ -151,6 +180,7 @@ async function fetchBbc({ source, http, now }) {
           language: "en",
           domains: [{ domain: "politics", confidence: 0.7 }],
           tags: ["bbc", "rss", ...item.categories],
+          media: item.media,
           rawMetadata: { categories: item.categories }
         },
         fetchedAt

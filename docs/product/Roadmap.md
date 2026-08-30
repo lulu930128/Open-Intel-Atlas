@@ -6,7 +6,7 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 ## 目前基線
 
-- `已存在`：Node.js 原生 HTTP server、23-source registry、canonical `Source → Document → Story → Event` pipeline、schema v3 `atlas.sqlite`、SQLite-owned persistent scheduler、durable `story_updates`、bounded catch-up、conditional GET、domain freshness、consumer contract `1.1` profiles、`/api/v1`、loopback read-only MCP、legacy projection、editorial newsroom／map UI、contract tests，以及由 current-user Windows logon task 啟動的 single-instance 托盤 owner。
+- `已存在`：Node.js 原生 HTTP server、23-source registry、canonical `Source → Document → Story → Event` pipeline、schema v4 `atlas.sqlite`、Document-owned media policy／projection、SQLite-owned persistent scheduler、durable `story_updates`、bounded catch-up、conditional GET、domain freshness、consumer contract `1.1` profiles、`/api/v1`、loopback read-only MCP、legacy projection、editorial newsroom／map UI、contract tests，以及由 current-user Windows logon task 啟動的 single-instance 托盤 owner。
 - `進行中`：Operational UI 第一個可用版本已完成 overview、事件／報導 evidence view、domain desks、search 與 system status；Consumer Gateway 已完成 Atlas 端 contract 與 local protocol proof，接著收斂 correction/retraction、OMI/Kuro 實際採用與長期營運能力。
 - `尚未完成`：correction/retraction 完整流程、auth/rate limit、公網部署、OMI/Kuro runtime wiring、backup retention/restore drill 與多節點 scheduler。
 
@@ -65,6 +65,10 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 ## 近期完成
 
+- `2026-08-30`：完成 Newsroom 領域導覽 v2。首頁改為跨領域摘要與四個固定高度的動態入口，完整事件流、bounded cursor、來源健康、已知缺口與 evidence view 移至 backend registry 驅動的共用 domain 子頁；desktop／390px browser、invalid-domain、事件詳情與分頁 smoke 通過，既有 live runtime 已直接提供新 static frontend。
+- `2026-08-30`：完成 1.3.0 封版前架構收斂的 source-ready gate。Media outward projection 依 current source policy fail closed、保留 Document／Source lineage，並跨 supporting evidence deterministic 選圖；Full Map 改讀 canonical `/api/v1/events`，具 bounded cursor pagination、canonical domain／UTC range、可靠座標與 alpha-2 country association。無 production reference 的舊 runtime island 已移除，legacy compatibility API／database 保留；copied DB、REST、MCP、desktop／390px browser與完整 verify 已通過，正式 runtime adoption 仍是獨立 gate。
+- `2026-08-30`：交付 Media Visual Newsroom v1 並完成 live schema v4 adoption。`document_media` 與 representative invariant 保留 Document ownership；GDELT/RSS media 經 rights／display authorization／terms evidence／HTTPS／allowed-host policy fail closed；REST/MCP 共用 optional media projection。Newsroom 只有在 `remote_embed` 成立時顯示來源圖片，否則以純文字版面自然收合；provider-live 仍待逐來源 terms review。
+- `2026-08-30`：BBC News World RSS 完成第一個 bounded provider-live media policy。官方 feed thumbnail 只在 `personal_noncommercial` runtime context、BBC attribution、原文連結與 exact `ichef.bbci.co.uk` allowlist 下成為 `remote_embed`；其他 context 與來源維持 fail closed。
 - `2026-08-23`：交付 editorial newsroom v1。首頁以 backend-selected highlight 作頭條，提供 live events、latest stories、四領域版面、跨事件／報導／文件搜尋、evidence drawer 與 partial/stale/source-gap 說明；desktop 與 360px browser smoke 通過，既有全屏地圖維持可用。
 - `2026-08-23`：交付 Consumer Gateway v1。Schema v3 保存 durable Story/Event changes；REST 與 MCP 共用 contract `1.1` profiles；loopback MCP 通過 modern/legacy protocol smoke。外部 OMI/Kuro adoption 仍屬 M5。
 

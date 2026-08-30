@@ -26,5 +26,8 @@
 - [Scheduler 與 freshness v2](agent-runs/scheduler-freshness-v2/Prompt.md)
 - [Editorial newsroom v1](agent-runs/editorial-newsroom-v1/Prompt.md)
 - [Windows tray v1](agent-runs/windows-tray-v1/Prompt.md)
+- [Media Visual Newsroom v1](agent-runs/media-visual-newsroom-v1/Prompt.md)
+- [1.3.0 封版前架構收斂](agent-runs/release-1-3-0-architecture-convergence/Prompt.md)
+- [Newsroom 領域導覽 v2](agent-runs/newsroom-domain-navigation-v2/Prompt.md)
 
 `docs/agent-runs/` 是可中斷續作的工作紀錄，不是永久架構規則。完成實作後，只有仍然成立的決策才回寫到產品或架構文件。

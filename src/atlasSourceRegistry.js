@@ -3,6 +3,7 @@ import { hazardSources } from "./atlasAdaptersHazards.js";
 import { politicsSources } from "./atlasAdaptersPolitics.js";
 import { technologySources } from "./atlasAdaptersTechnology.js";
 import { isDomain } from "./atlasDomains.js";
+import { normalizeSourceMediaPolicy } from "./documents/media.js";
 
 const DEFINITIONS = [...politicsSources, ...technologySources, ...financeSources, ...hazardSources];
 const CATCHUP_MODES = new Set(["latest_only", "window", "provider_history"]);
@@ -35,6 +36,11 @@ export function buildSourceRegistry(config) {
 
     return {
       ...definition,
+      mediaPolicy: normalizeSourceMediaPolicy(
+        typeof definition.mediaPolicy === "function"
+          ? definition.mediaPolicy(config)
+          : definition.mediaPolicy
+      ),
       catchupMode,
       enabled,
       disabledReason,
@@ -72,7 +78,8 @@ export function publicSourceDefinition(source) {
     catchup_mode: source.catchupMode || "latest_only",
     timeout_ms: source.timeoutMs,
     enabled: source.enabled,
-    disabled_reason: source.disabledReason
+    disabled_reason: source.disabledReason,
+    media_policy: source.mediaPolicy
   };
 }
 

@@ -14,6 +14,7 @@ export function parseFeedItems(xml) {
     const authors = [...block.matchAll(/<author\b[^>]*>([\s\S]*?)<\/author>/gi)]
       .map((match) => cleanText(readTag(match[1], "name") || match[1], 200))
       .filter(Boolean);
+    const media = parseFeedMedia(block);
 
     return {
       id: readTag(block, "guid") || readTag(block, "id") || null,
@@ -23,9 +24,38 @@ export function parseFeedItems(xml) {
       publishedAt: readTag(block, "pubDate") || readTag(block, "published") || readTag(block, "updated") || null,
       author: authors.join(", ") || cleanText(readTag(block, "dc:creator") || readTag(block, "author"), 300),
       categories,
+      media,
       raw: block
     };
   });
+}
+
+function parseFeedMedia(block) {
+  const candidates = [];
+  for (const match of block.matchAll(/<(media:content|media:thumbnail|enclosure)\b([^>]*)\/?\s*>/gi)) {
+    const tag = match[1].toLowerCase();
+    const attributes = parseAttributes(match[2]);
+    const mimeType = attributes.type || null;
+    if (tag === "enclosure" && mimeType && !mimeType.toLowerCase().startsWith("image/")) continue;
+    if (!attributes.url) continue;
+    candidates.push({
+      url: cleanText(attributes.url, 2048),
+      origin: "feed",
+      role: tag === "media:thumbnail" ? "thumbnail" : "main",
+      mimeType,
+      width: attributes.width || null,
+      height: attributes.height || null
+    });
+  }
+  return candidates.filter((candidate, index) => candidates.findIndex((item) => item.url === candidate.url) === index);
+}
+
+function parseAttributes(value) {
+  const attributes = {};
+  for (const match of String(value || "").matchAll(/([\w:-]+)\s*=\s*(["'])(.*?)\2/gs)) {
+    attributes[match[1].toLowerCase()] = match[3];
+  }
+  return attributes;
 }
 
 export function readTag(xml, tag) {

@@ -83,26 +83,45 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(storedEvent.verification_status, "multi_source");
   assert.equal(storedEvent.evidence_count, 2);
   assert.equal(storedEvent.location, null, "missing coordinates must not become a 0,0 location");
+  assert.equal(storedEvent.representative_media.display_policy, "remote_embed");
+  assert.equal(storedEvent.representative_media.url, "https://images.example.test/policy.jpg");
+  const mediaDocumentId = storedEvent.representative_media.document_id;
+  assert.ok(mediaDocumentId);
+  assert.equal(storedEvent.representative_media.source_id, source.id);
 
   const address = await runtime.listen();
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const healthResponse = await fetch(`${baseUrl}/api/v1/health`);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
-  assert.equal(health.version, "1.1.0");
+  assert.equal(health.version, "1.3.0");
   assert.equal(health.contract_version, "1.1");
-  assert.equal(health.storage.schema_version, 3);
+  assert.equal(health.storage.schema_version, 4);
   assert.equal(health.storage.events, 1);
   assert.equal(health.coverage.status, "full");
   assert.equal("db_file" in health.storage, false, "public health response must not expose local paths");
+
+  const newsroomResponse = await fetch(`${baseUrl}/`);
+  assert.equal(newsroomResponse.status, 200);
+  assert.equal(newsroomResponse.headers.get("referrer-policy"), "no-referrer");
+  assert.match(newsroomResponse.headers.get("content-security-policy"), /img-src 'self' https: data:/);
 
   const eventsResponse = await fetch(`${baseUrl}/api/v1/events?domain=politics&limit=5`);
   const events = await eventsResponse.json();
   assert.equal(eventsResponse.status, 200);
   assert.equal(events.data.length, 1);
   assert.equal(events.pagination.count, 1);
+  assert.equal(events.data[0].representative_media.document_id, mediaDocumentId);
+  assert.equal(events.data[0].representative_media.source_id, source.id);
 
-  const profiledEventsResponse = await fetch(`${baseUrl}/api/v1/events?profile=latest_events_v1&domain=politics&limit=5`);
+  const originalGetEvent = runtime.store.getEvent;
+  runtime.store.getEvent = () => assert.fail("latest_events_v1 must not hydrate every list item with getEvent");
+  let profiledEventsResponse;
+  try {
+    profiledEventsResponse = await fetch(`${baseUrl}/api/v1/events?profile=latest_events_v1&domain=politics&limit=5`);
+  } finally {
+    runtime.store.getEvent = originalGetEvent;
+  }
   const profiledEvents = await profiledEventsResponse.json();
   assert.equal(profiledEventsResponse.status, 200);
   assert.equal(profiledEvents.profile, "latest_events_v1");
@@ -110,6 +129,9 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
     profiledEvents.data[0].evidence_ids.sort(),
     runtime.store.getEvent(storedEvent.id).evidence.map((evidence) => evidence.id).sort()
   );
+  assert.equal(profiledEvents.data[0].representative_media.url, "https://images.example.test/policy.jpg");
+  assert.equal(profiledEvents.data[0].representative_media.document_id, mediaDocumentId);
+  assert.equal(profiledEvents.data[0].representative_media.source_id, source.id);
 
   const domainsResponse = await fetch(`${baseUrl}/api/v1/domains`);
   const domains = await domainsResponse.json();
@@ -127,6 +149,17 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const detail = await detailResponse.json();
   assert.equal(detailResponse.status, 200);
   assert.equal(detail.data.evidence.length, 2);
+  assert.equal(detail.data.representative_media.document_id, mediaDocumentId);
+  const detailStoryId = detail.data.stories[0].id;
+  const storyResponse = await fetch(`${baseUrl}/api/v1/stories/${encodeURIComponent(detailStoryId)}`);
+  const story = await storyResponse.json();
+  assert.equal(storyResponse.status, 200);
+  assert.equal(story.data.representative_media.document_id, mediaDocumentId);
+  const documentResponse = await fetch(`${baseUrl}/api/v1/documents/${encodeURIComponent(mediaDocumentId)}`);
+  const document = await documentResponse.json();
+  assert.equal(documentResponse.status, 200);
+  assert.equal(document.data.representative_media.document_id, mediaDocumentId);
+  assert.equal(document.data.representative_media.source_id, source.id);
 
   const changesResponse = await fetch(`${baseUrl}/api/v1/changes?domain=politics&limit=10`);
   const changes = await changesResponse.json();
@@ -167,7 +200,13 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(invalidProfileResponse.status, 400);
   assert.equal(invalidProfile.error.code, "invalid_profile");
 
-  const briefResponse = await fetch(`${baseUrl}/api/v1/brief?profile=brief_compact_v1&domain=politics`);
+  runtime.store.getEvent = () => assert.fail("brief_compact_v1 must not hydrate every list item with getEvent");
+  let briefResponse;
+  try {
+    briefResponse = await fetch(`${baseUrl}/api/v1/brief?profile=brief_compact_v1&domain=politics`);
+  } finally {
+    runtime.store.getEvent = originalGetEvent;
+  }
   const brief = await briefResponse.json();
   assert.equal(briefResponse.status, 200);
   assert.equal(brief.profile, "brief_compact_v1");
@@ -175,6 +214,8 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(brief.data.highlights[0].id, storedEvent.id);
   assert.equal(brief.data.highlights[0].domain, "politics", "compact profile keeps the v1 brief domain alias");
   assert.equal(typeof brief.data.highlights[0].confidence, "number", "compact profile keeps the v1 confidence field");
+  assert.equal(brief.data.highlights[0].representative_media.url, "https://images.example.test/policy.jpg");
+  assert.equal(brief.data.highlights[0].representative_media.document_id, mediaDocumentId);
   assert.equal(brief.coverage.status, "full");
 
   const discoverResponse = await modernMcpRequest(baseUrl, "server/discover");
@@ -207,7 +248,20 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const mcpBrief = await readMcpJson(mcpBriefResponse);
   assert.equal(mcpBrief.result.structuredContent.profile, "brief_compact_v1");
   assert.equal(mcpBrief.result.structuredContent.data.highlights[0].id, storedEvent.id);
+  assert.equal(mcpBrief.result.structuredContent.data.highlights[0].representative_media.url, "https://images.example.test/policy.jpg");
+  assert.equal(mcpBrief.result.structuredContent.data.highlights[0].representative_media.document_id, mediaDocumentId);
   assert.equal(mcpBrief.result.structuredContent.coverage.status, "full");
+
+  const mcpLatestResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.latest", arguments: { domain: "politics", limit: 5 } },
+    "atlas.latest"
+  );
+  assert.equal(mcpLatestResponse.status, 200);
+  const mcpLatest = await readMcpJson(mcpLatestResponse);
+  assert.equal(mcpLatest.result.structuredContent.data[0].representative_media.document_id, mediaDocumentId);
+  assert.equal(mcpLatest.result.structuredContent.data[0].representative_media.source_id, source.id);
 
   const invalidMcpCursorResponse = await modernMcpRequest(
     baseUrl,
@@ -314,6 +368,16 @@ function fixtureSource() {
     docsUrl: "https://example.test/docs",
     attribution: "Test fixture",
     policyNote: "Test only",
+    mediaPolicy: {
+      version: "fixture-media-v1",
+      default_display_policy: "remote_embed",
+      rights_class: "publisher_owned",
+      display_authorization: "explicit_license",
+      allowed_hosts: ["images.example.test"],
+      terms_url: "https://example.test/media-license",
+      reviewed_at: "2026-08-30T00:00:00.000Z",
+      reason: "Fixture publisher authorizes remote display."
+    },
     cadenceMs: 60_000,
     timeoutMs: 1_000,
     enabled: true,
@@ -331,7 +395,8 @@ function fixtureSource() {
           publisher: "Alpha News",
           publisherKey: "alpha.example.test",
           eventKey: "policy-2026",
-          eventTypeCandidate: "politics.regulation"
+          eventTypeCandidate: "politics.regulation",
+          media: [{ url: "https://images.example.test/policy.jpg", width: 1200, height: 675, altText: "Policy announcement" }]
         }, fetchedAt),
         createIntelDocument(source, {
           externalId: "event-b",

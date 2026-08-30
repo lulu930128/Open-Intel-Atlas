@@ -12,6 +12,7 @@
 | `source_runs` | 一次來源執行 | `run_id`；含 started/finished/status/error class |
 | `raw_artifacts` | bounded HTTP payload 與 metadata | source + request + content hash |
 | `documents` | normalized publisher/API item | source + external ID，或 canonical URL/content identity |
+| `document_media` | Document-owned 圖片候選、rights/display policy 與 representative selection | document + normalized media URL；每個 Document 最多一筆 representative |
 | `document_revisions` | 同一 Document 的內容修正 | document + revision/content hash |
 | `stories` | 同一發展中故事的聚合 | stable story ID + cluster version |
 | `story_documents` | Story 與 Document many-to-many lineage | story + document + relation/method |
@@ -31,6 +32,7 @@ erDiagram
     SOURCES ||--o{ SOURCE_RUNS : executes
     SOURCE_RUNS ||--o{ RAW_ARTIFACTS : fetches
     SOURCE_RUNS ||--o{ DOCUMENTS : discovers
+    DOCUMENTS ||--o{ DOCUMENT_MEDIA : owns
     DOCUMENTS ||--o{ DOCUMENT_REVISIONS : revises
     STORIES ||--o{ STORY_DOCUMENTS : groups
     DOCUMENTS ||--o{ STORY_DOCUMENTS : supports
@@ -82,6 +84,10 @@ erDiagram
 - `published_at` 無法解析時為 `null` 並保留 parse warning，不使用現在時間代替。
 - canonical URL 失敗時仍可用 provider external ID；兩者皆無時才退回 bounded content identity。
 - 同來源 revision 不建立一堆無關 Document；跨來源相似內容則保持不同 Document，再由 Story 聚合。
+
+### 4.1 Document media contract
+
+`document_media` 只保存 provider/feed 已明確提供的 image URL 與 bounded metadata，不由 read path 抓文章 HTML。`display_policy` 為 `blocked`、`candidate`、`link_only` 或 `remote_embed`；只有 source policy 同時核准 rights、明確展示授權、terms evidence、review time、HTTPS、allowed host 與 runtime usage context 時才可成為 `remote_embed`。`publisher_owned` 只描述所有權，不能單獨視為 Atlas 已獲遠端展示或 hotlink 授權。`UNIQUE(document_id, normalized_url)` 防止重抓重複，partial unique index 保證每個 Document 最多一筆 representative。Outward read 會將 persisted policy 與 current `sources.media_policy_json` 取較嚴格結果，再以代表 Document／supporting evidence 的 display-aware priority 選定 media；projection 必須保留實際 `document_id`／`source_id` lineage，不另存第二份 Story／Event 圖片 truth。
 
 ## 5. Story contract
 

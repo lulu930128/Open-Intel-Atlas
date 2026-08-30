@@ -26,13 +26,13 @@
             <button class="time-button" type="button" data-range="all">All</button>
           </div>
           <label>
-            <span>Category</span>
-            <select id="category-filter">
-              <option value="all">All categories</option>
-              <option value="geopolitics">International</option>
-              <option value="infrastructure">Infrastructure</option>
+            <span>Domain</span>
+            <select id="domain-filter">
+              <option value="all">All domains</option>
+              <option value="politics">Politics</option>
+              <option value="technology">Technology</option>
               <option value="finance">Finance</option>
-              <option value="ai">Technology</option>
+              <option value="hazards">Hazards</option>
             </select>
           </label>
           <button id="refresh-button" type="button">Refresh</button>
@@ -47,13 +47,13 @@
               <p class="eyebrow">Map records</p>
               <h1>Observed signals</h1>
             </div>
-            <span id="status-text">Collecting sources</span>
+            <span id="status-text" aria-live="polite">Loading canonical events</span>
           </div>
           <div class="map-records" id="map-records"></div>
         </aside>
       </section>
     </main>
 
-    <script src="/app.js" type="module"></script>
+    <script src="/atlas.js" type="module"></script>
   </body>
 </html>

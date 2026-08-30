@@ -76,10 +76,9 @@ export function createAtlasCapabilities(context) {
       }
       const limit = clampLimit(input.limit, 12);
       const result = context.store.listEvents({ ...input, domain, limit });
-      const events = result.items.map((event) => context.store.getEvent(event.id) || event);
       return envelope(
         "latest_events_v1",
-        events.map(projectCompactEvent),
+        result.items.map(projectCompactEvent),
         { domain },
         { pagination: { next_cursor: result.next_cursor, count: result.items.length } }
       );
@@ -126,7 +125,9 @@ export function createAtlasCapabilities(context) {
         throw new CapabilityError(400, "invalid_profile", "brief profile must be brief_compact_v1 or evidence_pack_v1");
       }
       const summaries = context.store.listEvents({ ...input, domain, limit }).items;
-      const events = summaries.map((event) => context.store.getEvent(event.id) || event);
+      const events = profileId === "evidence_pack_v1"
+        ? summaries.map((event) => context.store.getEvent(event.id) || event)
+        : summaries;
       const sources = context.store.listSources();
       const data =
         profileId === "evidence_pack_v1"
@@ -261,8 +262,9 @@ function projectCompactEvent(event) {
     last_updated_at: event.last_updated_at,
     evidence_count: event.evidence_count,
     independent_source_count: event.independent_source_count,
-    evidence_ids: (event.evidence || []).map((entry) => entry.id || entry.document_id).filter(Boolean),
+    evidence_ids: event.evidence_ids || (event.evidence || []).map((entry) => entry.id || entry.document_id).filter(Boolean),
     representative_url: event.representative_url,
+    representative_media: projectMedia(event.representative_media),
     location: event.location
   };
 }
@@ -299,10 +301,12 @@ function projectStory(story) {
     last_seen_at: story.last_seen_at,
     document_count: story.document_count,
     independent_source_count: story.independent_source_count,
+    domains: story.domains,
     cluster_method: story.cluster_method,
     cluster_version: story.cluster_version,
     representative_document_id: story.representative_document_id,
     merged_into_story_id: story.merged_into_story_id,
+    representative_media: projectMedia(story.representative_media || representative?.representative_media),
     documents: (story.documents || []).map(projectDocument)
   };
 }
@@ -326,7 +330,8 @@ function projectDocument(document) {
     domains: document.domains,
     tags: document.tags,
     first_seen_at: document.first_seen_at,
-    last_seen_at: document.last_seen_at
+    last_seen_at: document.last_seen_at,
+    representative_media: projectMedia(document.representative_media)
   };
 }
 
@@ -348,6 +353,30 @@ function projectSource(source) {
     docs_url: source.docs_url,
     attribution: source.attribution,
     policy_note: source.policy_note,
+    media_policy: source.media_policy,
     health: source.health
+  };
+}
+
+function projectMedia(media) {
+  if (!media) return null;
+  return {
+    id: media.id,
+    document_id: media.document_id,
+    source_id: media.source_id,
+    kind: media.kind,
+    role: media.role,
+    url: media.url,
+    thumbnail_url: media.thumbnail_url,
+    origin: media.origin,
+    mime_type: media.mime_type,
+    width: media.width,
+    height: media.height,
+    alt_text: media.alt_text,
+    attribution: media.attribution,
+    rights_class: media.rights_class,
+    display_policy: media.display_policy,
+    policy_version: media.policy_version,
+    policy_reason: media.policy_reason
   };
 }

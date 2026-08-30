@@ -155,6 +155,7 @@ async function fetchArxiv({ source, http, now }) {
         domains: [{ domain: "technology", confidence: 0.85 }],
         eventTypeCandidate: "technology.research",
         tags: ["arxiv", "research", "ai", ...item.categories],
+        media: item.media,
         rawMetadata: { categories: item.categories }
       },
       fetchedAt
@@ -232,6 +233,7 @@ async function fetchCisaAdvisories({ source, http, now }) {
           domains: [{ domain: "technology", confidence: 1 }],
           eventTypeCandidate: "technology.cybersecurity",
           tags: ["cisa", "cybersecurity", ...item.categories],
+          media: item.media,
           rawMetadata: { categories: item.categories }
         },
         fetchedAt

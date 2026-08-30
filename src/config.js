@@ -2,7 +2,9 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_NAME = "Open Intel Atlas";
-export const APP_VERSION = "1.1.0";
+export const APP_VERSION = "1.3.0";
+
+const MEDIA_USAGE_CONTEXTS = new Set(["unreviewed", "personal_noncommercial"]);
 
 const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
 
@@ -33,6 +35,7 @@ export function loadConfig(env = process.env) {
       }),
       userAgent: String(env.HTTP_USER_AGENT || "OpenIntelAtlas/1.0 local-research").trim()
     },
+    mediaUsageContext: readMediaUsageContext(env.ATLAS_MEDIA_USAGE_CONTEXT),
     collector: {
       schedulerEnabled,
       collectOnStart: schedulerEnabled && readBoolean(env.ATLAS_COLLECT_ON_START, true),
@@ -64,6 +67,11 @@ export function loadConfig(env = process.env) {
         .map(([key, value]) => [key, readBoolean(value, true)])
     )
   };
+}
+
+function readMediaUsageContext(value) {
+  const context = String(value || "unreviewed").trim().toLowerCase();
+  return MEDIA_USAGE_CONTEXTS.has(context) ? context : "unreviewed";
 }
 
 function optional(value) {

@@ -223,6 +223,7 @@ async function fetchSecFilings({ source, http, config, now }) {
         eventTypeCandidate: "finance.corporate",
         eventKey: item.id ? `sec-filing:${item.id}` : null,
         tags: ["sec", "edgar", form],
+        media: item.media,
         location: { label: "United States", countryCode: "US", precision: "issuer", confidence: 0.6 },
         rawMetadata: { event_eligible: eligible, form, categories: item.categories }
       },

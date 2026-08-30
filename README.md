@@ -2,7 +2,7 @@
 
 Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓取公開資料源，整理成統一的事件格式，提供人類可讀的 newsroom、全屏世界地圖，以及給其他程式或 AI agent 呼叫的 JSON API。
 
-目前版本：`1.2.0`
+目前版本：`1.3.0`
 
 這不是 World Monitor 的 clone。此專案使用自己的資料模型、API contract、UI 版面、source registry 和本地 SQLite 儲存方式。
 
@@ -12,18 +12,14 @@ Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓
 - 新的 canonical pipeline 採用 `Source → Document → Story → Event`，保留來源、raw fetch、衍生方法與證據 lineage。
 - 23 個 source adapter 已註冊；17 個無額外憑證即可啟用，6 個會在缺少設定或未明確開啟時 fail closed。
 - 每個來源各自保存 run status、最後成功／失敗、錯誤、筆數與 latency；單一來源失敗不會拖垮查詢 API。
-- SQLite schema v3 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，並以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化；process 重啟後不會把排程或 change cursor truth 歸零。
+- SQLite schema v4 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化，並用 `document_media` 保存受來源政策約束的圖片候選；process 重啟後不會把排程或 change cursor truth 歸零。
 - 可使用 ETag／Last-Modified 時送出 conditional GET；HTTP 304 視為來源成功但不建立重複 Document。
 - freshness 同時提供全域與 politics／technology／finance／hazards 分領域 coverage。
 - `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 consumer contract 為 `1.1`。
 - `/mcp` 提供 loopback-only、read-only 的 Atlas tools/resources；REST 與 MCP 共用同一個 backend capability layer，不各自計算 freshness、coverage 或 verification。
-- 首頁是 newsroom-first 版面，顯示本期頭條、live desk、最新報導、四領域 desks、搜尋與資料缺口；事件與 Story 詳情可直接回到原始證據。
-- `/atlas.html` 是獨立全屏情報地圖；只有具備可驗證座標的事件會出現在地圖上，並可跳到對應事件卡片。
-- `/api/dispatch` 提供 AI handoff brief、分類統計、watchlist、source 狀態與 normalized event highlights。
-- `/api/events` 提供 normalized event records，支援 `range`、`date`、`category`、`limit` 查詢。
-- `/api/sources` 提供資料源 metadata、用途、政策備註、docs URL、最新檢查狀態、最後成功/失敗時間。
-- `/api/dashboard` 提供首頁儀表板聚合資料：brief cards、top signals、watchlist impacts、sector heat、mini map points、data status、evidence feed。
-- `/api/stories` 和 `/api/topics` 提供濃縮新聞 story clustering 與趨勢主題資料。
+- 首頁是 newsroom-first 摘要版面，顯示本期頭條、live desk、6 則最新報導、四個領域入口、搜尋與資料缺口；完整領域事件流、來源健康與 evidence view 位於 `/domain.html?domain=politics|technology|finance|hazards`。Hero、Latest 前三則與 Domain 子頁 lead 只在 backend-selected `representative_media` 可 `remote_embed` 時顯示來源圖片，沒有合法圖片時使用自然收合的純文字版面。
+- `/atlas.html` 是獨立全屏情報地圖；它以 cursor pagination 讀取 canonical `/api/v1/events`，只有具備可驗證座標的事件會放置 marker，但無座標事件仍保留在列表。國家關聯只使用 backend `location.country_code`，不從標題猜測。
+- `/api/dispatch`、`/api/events`、`/api/sources`、`/api/dashboard`、`/api/stories` 與 `/api/topics` 是由 canonical store 投影的 legacy compatibility surface；正式 UI 與新 consumer 應使用 `/api/v1` 或 MCP capability。
 - v1 canonical data 寫入單一 `data/db/atlas.sqlite`，以關聯表表達多領域資料，不再一類別一個 DB。
 - 舊分類 DB 與 dashboard DB 可能繼續存在於本機，但不會由 v1 migration 刪除或由目前 runtime 讀寫；legacy `/api/*` 直接投影 canonical store。
 - Runtime DB、logs、`.env` 都已由 `.gitignore` 排除，不會進 repo。
@@ -137,7 +133,11 @@ Consumer profiles 由 `/api/v1/profiles` 發布，目前包含：
 
 `/api/v1/changes` 的 cursor 是 opaque 且綁定當次 `domain`／`change_type`。續接時必須帶回相同 filters；若要只接收之後的新變化，可先用 `cursor=now` 取得 head cursor。Kuro 的 `last_cursor`、安靜時間與 delivery log 仍由 Kuro 保存，Atlas 不會因讀取 change feed 自動發通知。
 
-從 schema v1/v2 升級到 v3 時不會合成過去不存在的 update history；既有 Story 的目前狀態可由 brief/story API 取得，change feed 只會記錄 v3 上線後發生的 material changes。
+從 schema v1/v2 升級到 v3 時不會合成過去不存在的 update history；既有 Story 的目前狀態可由 brief/story API 取得，change feed 只會記錄 v3 上線後發生的 material changes。Schema v4 的 media migration 是 additive，不解析舊 raw JSON、不抓網路，也不把 presentation policy 變更冒充 Story update。
+
+Representative media 是 Document-owned 的 optional additive projection，包含 `document_id`／`source_id` lineage。Outward query 會以 persisted media policy 與 current source media policy 共同計算 effective display policy，再跨 Story/Event supporting evidence deterministic 選圖；來源未同時通過 HTTPS、rights class、明確展示授權、terms evidence、review time 與 allowed-host policy 時，既有圖片也會立即 fail closed 為 `candidate`／`link_only`，不需等待下一次抓取。Newsroom 只有 `remote_embed` 才顯示圖片；REST 與 MCP consumer contract 仍為 `1.1`。
+
+BBC News World RSS 是目前第一個有條件通過的 live media source：只有 runtime 明確設定 `ATLAS_MEDIA_USAGE_CONTEXT=personal_noncommercial` 時，才會以官方 feed 原樣提供的 `ichef.bbci.co.uk` thumbnail、BBC News attribution 與原文連結產生 `remote_embed`。未設定、設定錯誤或未來商業／公開部署都會 fail closed 回到 `candidate`；商業使用需另取得 BBC 授權。
 
 ## MCP
 
@@ -169,7 +169,7 @@ atlas://stories/{storyId}
 
 Transport 支援 MCP `2026-07-28` 的 per-request flow，也保留 `2025-11-25`／`2025-06-18` legacy stateless requests。端點會拒絕非 loopback client 與非 localhost Host/Origin；它沒有 refresh、backfill、delete、publish、notify 或任意 URL fetch 工具。這只證明 Atlas 本機 endpoint 可用，不表示 Kuro、OMI、ChatGPT connector 或 Control Center 已完成設定與採用。
 
-以下 legacy API 保留給目前前端，由 canonical Event 即時投影，不會在 GET 時抓外部來源：
+以下 legacy API 保留作 compatibility surface，由 canonical Event 即時投影，不會在 GET 時抓外部來源；目前正式 Newsroom 與 Full Map 均讀取 `/api/v1`：
 
 ```text
 GET /api/health
@@ -189,7 +189,7 @@ GET /api/map-points
 range=live | 24h | 7d | 30d | all
 date=YYYY-MM-DD
 category=geopolitics | infrastructure | finance | ai
-limit=1..500
+limit=1..200
 ```
 
 範例：
@@ -204,7 +204,7 @@ GET /api/evidence?range=24h
 GET /api/map-points?category=geopolitics
 ```
 
-`/api/dashboard` 是之後儀表板首頁的主要資料入口。它會把 raw events 聚合成：
+`/api/dashboard` 僅保留 legacy compatibility。它會把 canonical Event 投影成舊 dashboard shape：
 
 ```text
 brief_cards
@@ -298,6 +298,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-atlas-logo
 - Windows 未登入或電腦關機期間仍無法抓取；重新登入後只補 provider 仍保留且 adapter 宣告可恢復的 bounded 資料。
 - Dispatch 還沒有排程寄送或 webhook；MCP 已提供 read-only 查詢，但尚未接入外部 consumer runtime。
 - 前端 newsroom 仍是單機基礎版，尚未加入登入、個人 watchlist、互動圖表或真正的即時行情。
+- BBC News World RSS 已完成第一輪個人非商業使用條款與 exact CDN allowlist 審核；其他真實來源仍維持 `candidate`。這個核准不涵蓋商業或公開部署。
 
 ## 下一步
 

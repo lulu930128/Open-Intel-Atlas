@@ -1,8 +1,17 @@
+import { collapseFailedVisual, markVisualLoaded, renderVisual } from "./newsroomMedia.js";
+
 const DOMAIN_LABELS = Object.freeze({
   politics: "政治",
   technology: "科技發展",
   finance: "金融",
   hazards: "氣象與災害"
+});
+
+const DOMAIN_CODES = Object.freeze({
+  politics: "POL",
+  technology: "TEC",
+  finance: "FIN",
+  hazards: "HAZ"
 });
 
 const STATUS_LABELS = Object.freeze({
@@ -42,6 +51,7 @@ const state = {
   freshnessEnvelope: null,
   eventsEnvelope: null,
   storiesEnvelope: null,
+  domainRegistry: [],
   domains: {},
   errors: []
 };
@@ -50,6 +60,7 @@ const elements = {
   lead: document.querySelector("#lead-story"),
   liveEvents: document.querySelector("#live-events"),
   latestStories: document.querySelector("#latest-stories"),
+  domainOverview: document.querySelector("#domain-overview"),
   detailDialog: document.querySelector("#detail-dialog"),
   detailKicker: document.querySelector("#detail-kicker"),
   detailContent: document.querySelector("#detail-content"),
@@ -131,7 +142,16 @@ function formatMonthDay(value) {
 }
 
 function domainLabel(value) {
-  return DOMAIN_LABELS[value] || cleanText(value, "其他");
+  return domainDefinition(value)?.label_zh_hant || DOMAIN_LABELS[value] || cleanText(value, "其他");
+}
+
+function domainDefinition(value) {
+  return state.domainRegistry.find((domain) => domain.id === value) || null;
+}
+
+function domainIds() {
+  const registered = state.domainRegistry.filter((domain) => domain.active !== false).map((domain) => domain.id).filter(Boolean);
+  return registered.length ? registered : Object.keys(DOMAIN_LABELS);
 }
 
 function statusLabel(value) {
@@ -198,14 +218,16 @@ function renderLead() {
   const sourceUrl = safeUrl(event.representative_url);
   const title = cleanText(event.title, "未命名事件");
 
-  elements.lead.classList.toggle("lead-story--long", title.length > 90);
-  elements.lead.classList.toggle("lead-story--very-long", title.length > 140);
+  elements.lead.classList.toggle("lead-story--long", title.length > 65);
+  elements.lead.classList.toggle("lead-story--very-long", title.length > 110);
+  elements.lead.removeAttribute("data-media-state");
 
   elements.lead.innerHTML = `
     <div class="lead-story__topline">
       <span class="domain-flag">${escapeHtml(domainLabel(domain))}</span>
       <span class="verification-label">${escapeHtml(verificationLabel(event.verification_status))}</span>
     </div>
+    ${renderVisual(event.representative_media, { domain, title, variant: "lead", priority: true })}
     <h1>${escapeHtml(title)}</h1>
     <p class="lead-story__summary">${escapeHtml(cleanText(event.summary, "此事件目前只有標題與來源紀錄，尚無可用摘要。"))}</p>
     <div class="evidence-ledger" aria-label="頭條查證摘要">
@@ -256,7 +278,7 @@ function storyFallbackSummary(story) {
 }
 
 function renderLatestStories() {
-  const stories = (state.storiesEnvelope?.data || []).slice(0, 9);
+  const stories = (state.storiesEnvelope?.data || []).slice(0, 6);
   if (!stories.length) {
     elements.latestStories.innerHTML = `<div class="empty-state"><strong>尚無最新報導</strong><span>這不是「沒有新聞」；可能是採集器尚未完成或目前沒有可聚類文件。</span></div>`;
     setBusy(elements.latestStories, false);
@@ -264,12 +286,18 @@ function renderLatestStories() {
   }
 
   elements.latestStories.innerHTML = stories
-    .map((story, index) => `
-      <article class="story-row">
+    .map((story, index) => {
+      const visual = index < 3 ? renderVisual(story.representative_media, {
+        title: story.canonical_title,
+        variant: "stream"
+      }) : "";
+      return `
+      <article class="story-row ${visual ? "story-row--visual" : ""}">
         <div class="story-row__folio">
           <strong>${String(index + 1).padStart(2, "0")}</strong>
           <time datetime="${escapeHtml(story.last_seen_at || "")}" title="${escapeHtml(formatDateTime(story.last_seen_at))}">${escapeHtml(formatMonthDay(story.last_seen_at))}</time>
         </div>
+        ${visual}
         <button type="button" data-detail-type="story" data-detail-id="${escapeHtml(story.id)}">
           <h3>${escapeHtml(cleanText(story.canonical_title, "未命名報導"))}</h3>
           <p class="story-row__summary">${escapeHtml(cleanText(story.summary, storyFallbackSummary(story)))}</p>
@@ -278,42 +306,47 @@ function renderLatestStories() {
           <strong>${escapeHtml(story.status === "active" ? "持續追蹤" : story.status === "emerging" ? "新出現" : cleanText(story.status, "狀態未提供"))}</strong>
           ${Number(story.document_count || 0)} 份文件<br />${Number(story.independent_source_count || 0)} 個獨立來源
         </div>
-      </article>`)
+      </article>`;
+    })
     .join("");
   setBusy(elements.latestStories, false);
 }
 
 function renderDomains() {
-  for (const domain of Object.keys(DOMAIN_LABELS)) {
-    const target = document.querySelector(`[data-domain-list="${domain}"]`);
+  if (!elements.domainOverview) return;
+  elements.domainOverview.innerHTML = domainIds().map((domain) => {
+    const definition = domainDefinition(domain) || {};
     const result = state.domains[domain];
-    if (!target) continue;
+    const info = domainFreshnessObject(domain);
+    const freshnessStatus = info?.freshness?.status || info?.status || "unknown";
+    const coverageStatus = info?.coverage?.status;
+    const combinedState = coverageStatus === "partial" ? "partial" : freshnessStatus;
+    const status = coverageStatus === "partial"
+      ? `${statusLabel(freshnessStatus)}／部分來源`
+      : statusLabel(freshnessStatus);
+    const events = (result?.envelope?.data || []).slice(0, 2);
+    const body = result?.error
+      ? `<div class="domain-entry__empty"><strong>暫時無法讀取</strong><span>${escapeHtml(result.error)}</span></div>`
+      : events.length
+        ? `<ol class="domain-entry__signals">${events.map((event) => {
+            const time = event.last_updated_at || event.occurred_at;
+            return `<li><time datetime="${escapeHtml(time || "")}" title="${escapeHtml(formatDateTime(time))}">${escapeHtml(formatMonthDay(time))}</time><span>${escapeHtml(cleanText(event.title, "未命名事件"))}</span></li>`;
+          }).join("")}</ol>`
+        : `<div class="domain-entry__empty"><strong>目前沒有事件進入本期</strong><span>這不代表此領域沒有新聞。</span></div>`;
 
-    if (result?.error) {
-      target.innerHTML = `<div class="error-state"><strong>這個版面暫時無法讀取</strong><span>${escapeHtml(result.error)}</span></div>`;
-      continue;
-    }
-
-    const events = (result?.envelope?.data || []).slice(0, 4);
-    if (!events.length) {
-      target.innerHTML = `<div class="empty-state"><strong>本期尚無事件</strong><span>不代表此領域沒有新聞；只表示目前沒有資料進入事件層。</span></div>`;
-      continue;
-    }
-
-    target.innerHTML = events
-      .map((event) => {
-        const time = event.last_updated_at || event.occurred_at;
-        return `
-          <article class="domain-story">
-            <time datetime="${escapeHtml(time || "")}" title="${escapeHtml(formatDateTime(time))}">${escapeHtml(formatMonthDay(time))}</time>
-            <button type="button" data-detail-type="event" data-detail-id="${escapeHtml(event.id)}">
-              <h4>${escapeHtml(cleanText(event.title, "未命名事件"))}</h4>
-              <p>${escapeHtml(verificationLabel(event.verification_status))} · ${Number(event.evidence_count || 0)} 份證據</p>
-            </button>
-          </article>`;
-      })
-      .join("");
-  }
+    return `
+      <article class="domain-entry" data-domain="${escapeHtml(domain)}">
+        <div class="domain-entry__bearing" aria-hidden="true"><span>${escapeHtml(DOMAIN_CODES[domain] || domain.slice(0, 3).toUpperCase())}</span><i></i></div>
+        <header>
+          <div><p>${escapeHtml(cleanText(definition.label_en, domain))}</p><h3>${escapeHtml(domainLabel(domain))}</h3></div>
+          <span class="status-word" data-state="${escapeHtml(combinedState)}">${escapeHtml(status)}</span>
+        </header>
+        <p class="domain-entry__description">${escapeHtml(cleanText(definition.description, "開啟版面查看最新事件、來源與資料限制。"))}</p>
+        ${body}
+        <a class="domain-entry__link" href="/domain.html?domain=${encodeURIComponent(domain)}"><span>進入${escapeHtml(domainLabel(domain))}版</span><span aria-hidden="true">↗</span></a>
+      </article>`;
+  }).join("");
+  setBusy(elements.domainOverview, false);
 }
 
 function domainFreshnessObject(domain) {
@@ -341,7 +374,7 @@ function renderFreshness() {
     label.textContent = coverage.status === "partial" ? "資料部分可用" : `資料${statusLabel(globalStatus)}`;
   }
 
-  const rows = Object.keys(DOMAIN_LABELS).map((domain) => {
+  const rows = domainIds().map((domain) => {
     const info = domainFreshnessObject(domain);
     const freshnessStatus = info?.freshness?.status || info?.status || "unknown";
     const coverageStatus = info?.coverage?.status;
@@ -349,12 +382,6 @@ function renderFreshness() {
     const text = coverageStatus === "partial"
       ? `${statusLabel(freshnessStatus)}／部分來源`
       : statusLabel(freshnessStatus);
-    const inline = document.querySelector(`[data-domain-freshness="${domain}"]`);
-    if (inline) {
-      inline.textContent = text;
-      inline.className = "status-word";
-      inline.dataset.state = combinedState;
-    }
     return `<div class="freshness-row"><span>${escapeHtml(domainLabel(domain))}</span><span class="status-word" data-state="${escapeHtml(combinedState)}">${escapeHtml(text)}</span></div>`;
   });
 
@@ -450,11 +477,13 @@ function renderEventDetail(data) {
   const evidence = data.evidence || [];
   const sourceUrl = safeUrl(data.representative_url);
   elements.detailKicker.textContent = "EVENT / EVIDENCE VIEW";
+  elements.detailContent.removeAttribute("data-media-state");
   elements.detailContent.innerHTML = `
     <div class="detail-domain">
       <span class="domain-flag">${escapeHtml(domainLabel(domain))}</span>
       <span class="verification-label">${escapeHtml(verificationLabel(data.verification_status))}</span>
     </div>
+    ${renderVisual(data.representative_media, { domain, title: data.title, variant: "detail" })}
     <h2 id="detail-title">${escapeHtml(cleanText(data.title, "未命名事件"))}</h2>
     <p class="detail-summary">${escapeHtml(cleanText(data.summary, "此事件目前沒有可用摘要。"))}</p>
     <section class="detail-section" aria-labelledby="event-facts-heading">
@@ -481,11 +510,13 @@ function renderStoryDetail(data) {
   const domain = representative?.domains?.[0]?.domain;
   const summary = data.summary || representative?.summary;
   elements.detailKicker.textContent = "REPORT / SOURCE VIEW";
+  elements.detailContent.removeAttribute("data-media-state");
   elements.detailContent.innerHTML = `
     <div class="detail-domain">
       <span class="domain-flag">${escapeHtml(domainLabel(domain))}</span>
       <span class="verification-label">聚類報導 · ${escapeHtml(data.status === "active" ? "持續追蹤" : data.status === "emerging" ? "新出現" : cleanText(data.status, "狀態未提供"))}</span>
     </div>
+    ${renderVisual(data.representative_media || representative?.representative_media, { domain, title: data.canonical_title, variant: "detail" })}
     <h2 id="detail-title">${escapeHtml(cleanText(data.canonical_title, "未命名報導"))}</h2>
     <p class="detail-summary">${escapeHtml(cleanText(summary, storyFallbackSummary(data)))}</p>
     <section class="detail-section" aria-labelledby="story-facts-heading">
@@ -635,8 +666,9 @@ async function loadHome() {
   const requests = [
     ["本期摘要", "/api/v1/brief", (value) => { state.briefEnvelope = value; }],
     ["最新事件", "/api/v1/events?limit=12", (value) => { state.eventsEnvelope = value; }],
-    ["最新報導", "/api/v1/stories?limit=12", (value) => { state.storiesEnvelope = value; }],
-    ["資料狀態", "/api/v1/freshness", (value) => { state.freshnessEnvelope = value; }]
+    ["最新報導", "/api/v1/stories?limit=8", (value) => { state.storiesEnvelope = value; }],
+    ["資料狀態", "/api/v1/freshness", (value) => { state.freshnessEnvelope = value; }],
+    ["領域註冊表", "/api/v1/domains", (value) => { state.domainRegistry = Array.isArray(value.data) ? value.data : []; }]
   ];
 
   const coreResults = await Promise.allSettled(requests.map(([, path]) => api(path)));
@@ -647,9 +679,9 @@ async function loadHome() {
   });
 
   const domainResults = await Promise.allSettled(
-    Object.keys(DOMAIN_LABELS).map((domain) => api(`/api/v1/events?domain=${encodeURIComponent(domain)}&limit=4`))
+    domainIds().map((domain) => api(`/api/v1/events?domain=${encodeURIComponent(domain)}&limit=2`))
   );
-  Object.keys(DOMAIN_LABELS).forEach((domain, index) => {
+  domainIds().forEach((domain, index) => {
     const result = domainResults[index];
     if (result.status === "fulfilled") state.domains[domain] = { envelope: result.value };
     else {
@@ -668,6 +700,12 @@ async function loadHome() {
 }
 
 wireInteractions();
+document.addEventListener("error", (event) => {
+  collapseFailedVisual(event.target);
+}, true);
+document.addEventListener("load", (event) => {
+  markVisualLoaded(event.target);
+}, true);
 loadHome().catch((error) => {
   recordError("首頁", error);
   elements.lead.innerHTML = `<div class="error-state"><strong>首頁資料目前無法讀取</strong><span>${escapeHtml(cleanText(error?.message, "未知錯誤"))}</span></div>`;

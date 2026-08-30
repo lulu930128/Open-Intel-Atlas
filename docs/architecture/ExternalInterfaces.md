@@ -180,13 +180,15 @@ Kuro timer / user request
 
 profile 只控制欄位與大小，不改變 evidence、verification 或權限。profile 名稱不是 authentication。
 
+`representative_media` 是 nullable additive field，可出現在 Document、Story 與 compact Event projection；它包含實際 media-owning `document_id`／`source_id`、attribution、rights class、effective display policy 與 current policy version。Consumer 只有在 `display_policy=remote_embed` 時才可顯示遠端圖片，且 media 不取代 `representative_url` 或 evidence IDs。Backend 會以 persisted media policy 與 current source policy 共同 fail closed，再依 display-aware evidence priority 選圖；Source status 的 `media_policy` 另公開 `display_authorization`、`terms_url`、`reviewed_at` 與 allowed hosts，供稽核 policy 依據。這些欄位是 additive，consumer contract 仍維持 `1.1`。
+
 Change cursor 是 opaque global sequence 加上 filter scope。Consumer 必須以相同 `domain`／`change_type` 續接；換 scope 時從新的 cursor 開始，不能把舊 cursor 當成通用時間戳。
 
 ## 7. 相容與採用策略
 
 1. `已完成`：建立 `/api/v1` contract tests、legacy projection mapping、representation profiles 與 durable change feed。
 2. `已完成`：建立 read-only MCP transport 並完成 modern/legacy local protocol smoke。
-3. `進行中`：UI 逐步改讀 v1，保留既有 legacy projection 作 rollback path。
+3. `已完成`：正式 Newsroom 與 Full Map 改讀 v1；Full Map 使用 cursor pagination、canonical domain/geo，legacy projection 僅保留作 compatibility path。
 4. `待完成`：OMI 採用單一 read-only evidence flow並驗證市場語意 ownership。
 5. `待完成`：Kuro 採用 change cursor + compact brief flow並驗證 persona/notification ownership。
 6. `待完成`：以 access log/contract version 確認 legacy consumer 歸零後，才討論移除舊 API。

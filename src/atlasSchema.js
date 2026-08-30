@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export function initializeAtlasSchema(db) {
   db.exec(`
@@ -24,6 +24,7 @@ export function initializeAtlasSchema(db) {
       docs_url TEXT,
       attribution TEXT,
       policy_note TEXT,
+      media_policy_json TEXT NOT NULL DEFAULT '{}',
       enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
       disabled_reason TEXT,
       domains_json TEXT NOT NULL,
@@ -128,6 +129,33 @@ export function initializeAtlasSchema(db) {
       confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
       PRIMARY KEY (document_id, domain),
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS document_media (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind = 'image'),
+      role TEXT NOT NULL CHECK (role IN ('main', 'thumbnail', 'supporting')),
+      url TEXT NOT NULL,
+      normalized_url TEXT NOT NULL,
+      thumbnail_url TEXT,
+      origin TEXT NOT NULL CHECK (origin IN ('provider', 'publisher', 'official', 'feed')),
+      mime_type TEXT,
+      width INTEGER CHECK (width IS NULL OR (width > 0 AND width <= 20000)),
+      height INTEGER CHECK (height IS NULL OR (height > 0 AND height <= 20000)),
+      alt_text TEXT,
+      attribution TEXT,
+      rights_class TEXT NOT NULL CHECK (rights_class IN ('unknown', 'restricted', 'licensed', 'public_domain', 'publisher_owned')),
+      display_policy TEXT NOT NULL CHECK (display_policy IN ('blocked', 'candidate', 'link_only', 'remote_embed')),
+      policy_version TEXT NOT NULL,
+      policy_reason TEXT NOT NULL,
+      is_representative INTEGER NOT NULL DEFAULT 0 CHECK (is_representative IN (0, 1)),
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      UNIQUE (document_id, normalized_url),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE RESTRICT
     );
 
     CREATE TABLE IF NOT EXISTS stories (
@@ -298,6 +326,10 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_documents_event_key ON documents(event_key) WHERE event_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_documents_dedupe ON documents(source_id, dedupe_key);
     CREATE INDEX IF NOT EXISTS idx_document_domains_domain ON document_domains(domain, document_id);
+    CREATE INDEX IF NOT EXISTS idx_document_media_document ON document_media(document_id, is_representative DESC);
+    CREATE INDEX IF NOT EXISTS idx_document_media_source ON document_media(source_id, last_seen_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_document_media_one_representative
+      ON document_media(document_id) WHERE is_representative = 1;
     CREATE INDEX IF NOT EXISTS idx_stories_last_seen ON stories(last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS idx_story_documents_document ON story_documents(document_id);
     CREATE INDEX IF NOT EXISTS idx_events_domain_time ON events(primary_domain, last_updated_at DESC);
@@ -320,6 +352,8 @@ export function initializeAtlasSchema(db) {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(2, now);
   migrateStoriesV3(db);
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(3, now);
+  migrateSourcesV4(db);
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(4, now);
 }
 
 function migrateSourcesV2(db) {
@@ -350,5 +384,12 @@ function migrateStoriesV3(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(stories)").all().map((column) => column.name));
   if (!columns.has("version")) {
     db.exec("ALTER TABLE stories ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)");
+  }
+}
+
+function migrateSourcesV4(db) {
+  const columns = new Set(db.prepare("PRAGMA table_info(sources)").all().map((column) => column.name));
+  if (!columns.has("media_policy_json")) {
+    db.exec("ALTER TABLE sources ADD COLUMN media_policy_json TEXT NOT NULL DEFAULT '{}'");
   }
 }

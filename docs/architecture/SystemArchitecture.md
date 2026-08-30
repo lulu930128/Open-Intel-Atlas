@@ -10,7 +10,7 @@
 - 對外 versioned API 與 read-only-first MCP。
 - OMI、Kuro 與其他 agent 的一致資料供應。
 
-本文件同時描述目前實作與長期 target。2026-08-23 的 runtime 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event` canonical pipeline、SQLite schema v3 scheduler／durable change log、consumer contract `1.1` REST profiles 與 loopback read-only MCP；public auth、多實例部署、OMI/Kuro runtime adoption 及完整 correction/retraction workflow 仍屬後續範圍。
+本文件同時描述目前實作與長期 target。2026-08-30 的 source 與 local runtime 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event` canonical pipeline、SQLite schema v4 scheduler／durable change log／Document media、consumer contract `1.1` REST profiles 與 loopback read-only MCP；逐來源 provider media terms acceptance、public auth、多實例部署、OMI/Kuro runtime adoption 及完整 correction/retraction workflow 仍屬後續範圍。
 
 ## 2. 架構原則
 
@@ -51,11 +51,12 @@ flowchart LR
 
 | Component | Target responsibility | 初期部署 |
 | --- | --- | --- |
-| Source Registry | source metadata、domain、authority、rights、cadence、required config、enabled policy | version-controlled module/table |
+| Source Registry | source metadata、domain、authority、rights、media display policy、allowed hosts、cadence、required config、enabled policy | version-controlled module/table |
 | Collector | HTTP policy、payload bounds、conditional request、retry、source adapter execution | backend process 內 bounded worker |
 | Scheduler | cadence、jitter、startup catch-up、lease、concurrency、shutdown | backend process 內 scheduler |
 | Raw Capture | 保存 bounded payload、hash、HTTP metadata、truncated flag | `atlas.sqlite` |
 | Normalizer | 產生 stable `Document`、URL canonicalization、time/language/text normalization | pure/testable modules |
+| Media Normalizer / Selector | 將 provider/feed 圖片正規化為 Document-owned candidate；outward projection 依 persisted + current source policy 執行 HTTPS、userinfo/IP/localhost、rights、authorization、terms/review 與 allowed-host gate，再跨 evidence deterministic 選圖 | pure/testable module + `document_media` |
 | Intelligence Pipeline | dedupe、Story clustering、Event/evidence、entity、geo、verification、brief projection | versioned pipeline jobs |
 | Canonical Store | schema、migration、transactions、query indexes、audit lineage | SQLite WAL；達 gate 後再評估 PostgreSQL |
 | Query Service | search/filter/pagination、freshness/coverage、representation | backend capability layer |
@@ -208,6 +209,7 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 - secrets、provider keys、trust token 不進 DB raw artifact、log、API error 或 git。
 - 對外 API 需 TLS、authentication、rate limit、quota、request size limit 與 audit correlation ID。
 - 保存與再散布以 source-specific rights matrix 控制；預設 metadata + short excerpt + link，不保存或回傳全文。
+- Remote image display 另受 source-specific media policy 與 runtime usage context 控制；outward read 必須同時檢查 persisted media policy 與 current `sources.media_policy_json`。未知 rights、缺少明確展示授權／terms evidence／review time、未核准 host 或使用情境不符時立即降級為 candidate／link，不依賴下一次 crawl。UI 沒有 `remote_embed` 時不產生圖片區，broken image 直接收合；read path 不得抓 article HTML。
 - LLM 摘要附 evidence IDs、model、prompt/version 與時間；生成失敗不影響 canonical evidence 查詢。
 
 ## 13. Observability 與驗證
@@ -233,7 +235,7 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 
 ## 14. 已知架構缺口
 
-- 受支援的 runtime entrypoint 是 `src/atlasServer.js`；較早的 `src/server.js`、legacy collector 與 category store 仍留在 repo，但不再由 package script、測試或目前 runtime 引用，新功能不得建立在這條舊路徑上。
+- 受支援且唯一的 runtime entrypoint 是 `src/atlasServer.js`；較早且無 production reference 的 `src/server.js`、legacy collector／registry 與 category store source 已移除。既有 legacy SQLite data 未刪除，也不再是 canonical runtime truth。
 - Canonical Story/Event pipeline 已上線，但 clustering、entity extraction、severity 與 confidence 仍是 versioned deterministic baseline，尚未接完整 NLP 或 correction/retraction timeline。
 - 自動測試已覆蓋 identity、dedupe、lineage、schema migration、lease/backoff、catch-up、304 與 domain freshness；malformed provider payload、rate-limit 與更多 adapter fixtures 仍需補強。
 - `src/dashboard.js` 仍提供 legacy dashboard projection；它不擁有 canonical Story/Event truth，也不由查詢路徑抓取 provider。

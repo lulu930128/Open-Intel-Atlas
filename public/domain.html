@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Open Intel Atlas 領域觀察版：事件、來源與資料缺口在同一條閱讀路徑上。" />
+    <meta name="theme-color" content="#e9eff0" />
+    <title>領域觀察｜Open Intel Atlas</title>
+    <link rel="stylesheet" href="/newsroom.css" />
+  </head>
+  <body class="domain-page">
+    <a class="skip-link" href="#main-content">跳到主要內容</a>
+
+    <div class="utility-bar" aria-label="領域資料狀態">
+      <div class="page-shell utility-bar__inner">
+        <p id="domain-edition-line">正在確認領域資料時間</p>
+        <p class="domain-utility-state"><span class="state-mark" data-domain-state aria-hidden="true"></span><span id="domain-status-label">檢查資料狀態</span></p>
+      </div>
+    </div>
+
+    <header class="site-header">
+      <div class="page-shell masthead masthead--domain">
+        <a class="wordmark" href="/" aria-label="Open Intel Atlas 首頁">
+          <span class="wordmark__open">OPEN INTEL</span>
+          <span class="wordmark__atlas">ATLAS</span>
+        </a>
+        <div class="masthead__statement">
+          <p class="eyebrow">DOMAIN OBSERVATION DESK</p>
+          <p>沿單一領域閱讀事件、原始證據與來源健康。</p>
+        </div>
+        <div class="masthead__actions">
+          <a class="map-link" href="/">回到本期摘要 <span aria-hidden="true">↗</span></a>
+          <a class="map-link" href="/atlas.html">情報地圖 <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+      <nav class="desk-nav" aria-label="切換新聞領域">
+        <div class="page-shell desk-nav__inner">
+          <a href="/">本期摘要</a>
+          <a data-domain-nav="politics" href="/domain.html?domain=politics">政治</a>
+          <a data-domain-nav="technology" href="/domain.html?domain=technology">科技發展</a>
+          <a data-domain-nav="finance" href="/domain.html?domain=finance">金融</a>
+          <a data-domain-nav="hazards" href="/domain.html?domain=hazards">氣象與災害</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <section class="domain-mast" id="domain-mast" aria-labelledby="domain-page-title" aria-busy="true">
+        <div class="loading-block domain-loading-mast"></div>
+      </section>
+
+      <section class="domain-workspace" id="domain-workspace" aria-label="領域事件與來源">
+        <div class="domain-workspace__main">
+          <article class="domain-lead" id="domain-lead" aria-live="polite" aria-busy="true">
+            <div class="loading-block loading-block--lead"></div>
+          </article>
+          <section class="domain-feed" aria-labelledby="domain-feed-heading">
+            <div class="section-heading">
+              <div><p class="section-index">EVENT STREAM</p><h2 id="domain-feed-heading">事件流</h2></div>
+              <p class="section-note">依後端最後更新時間排序；不使用人氣或前端重要度分數。</p>
+            </div>
+            <div id="domain-events" class="domain-event-list" aria-live="polite" aria-busy="true">
+              <div class="loading-story"></div><div class="loading-story"></div><div class="loading-story"></div>
+            </div>
+            <button class="domain-load-more" id="domain-load-more" type="button" hidden>載入較早事件 <span aria-hidden="true">↓</span></button>
+          </section>
+        </div>
+
+        <aside class="domain-source-rail" aria-labelledby="domain-sources-heading">
+          <div class="domain-source-rail__sticky">
+            <div class="field-notes__header"><p class="section-index">SOURCE WATCH</p><h2 id="domain-sources-heading">來源與缺口</h2></div>
+            <div id="domain-coverage" class="domain-coverage"><p class="muted">正在讀取領域狀態</p></div>
+            <div id="domain-sources" class="domain-source-list"><p class="muted">正在讀取來源</p></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="page-shell site-footer__inner">
+        <div><strong>OPEN INTEL ATLAS</strong><p>Domain observation desk.</p></div>
+        <p id="domain-footer-updated">等待資料更新時間</p>
+        <div class="site-footer__links"><a href="/">本期摘要</a><a href="/atlas.html">情報地圖</a></div>
+      </div>
+    </footer>
+
+    <dialog class="detail-dialog" id="detail-dialog" aria-labelledby="detail-title">
+      <div class="dialog-frame">
+        <header class="dialog-header">
+          <div><p class="section-index">EVENT / EVIDENCE VIEW</p><p class="dialog-context">事件、來源與限制</p></div>
+          <button class="close-button" type="button" data-close-dialog aria-label="關閉詳情">關閉 <span aria-hidden="true">×</span></button>
+        </header>
+        <div class="dialog-body" id="detail-content"><h2 id="detail-title">載入中</h2></div>
+      </div>
+    </dialog>
+
+    <noscript><div class="noscript-note">這個頁面需要 JavaScript 才能讀取本機新聞 API。請啟用 JavaScript 後重新整理。</div></noscript>
+    <script src="/domain.js" type="module"></script>
+  </body>
+</html>

@@ -64,7 +64,7 @@ body[data-page="atlas"] {
 }
 
 body[data-page="atlas"] .atlas-shell {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   padding: 0;
   margin: 0;
@@ -719,8 +719,13 @@ code {
   fill: var(--green);
 }
 
-.event-marker.ai circle:first-child {
+.event-marker.ai circle:first-child,
+.event-marker.technology circle:first-child {
   fill: var(--violet);
+}
+
+.event-marker.hazards circle:first-child {
+  fill: var(--yellow);
 }
 
 .marker-ring {
@@ -791,7 +796,8 @@ code {
   background: var(--cyan);
 }
 
-.legend-dot.infrastructure {
+.legend-dot.infrastructure,
+.legend-dot.hazards {
   background: var(--yellow);
 }
 
@@ -799,8 +805,13 @@ code {
   background: var(--green);
 }
 
-.legend-dot.ai {
+.legend-dot.ai,
+.legend-dot.technology {
   background: var(--violet);
+}
+
+.legend-dot.politics {
+  background: var(--cyan);
 }
 
 .map-state,

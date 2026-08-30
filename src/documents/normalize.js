@@ -9,6 +9,7 @@ import {
   toIsoTimestamp
 } from "../core/utils.js";
 import { isDomain } from "../atlasDomains.js";
+import { normalizeDocumentMedia } from "./media.js";
 
 const VALID_DOCUMENT_TYPES = new Set([
   "news",
@@ -50,6 +51,7 @@ export function createIntelDocument(source, input, now = new Date().toISOString(
     raw_severity: input.rawSeverity ?? null,
     location: sanitizeLocation(input.location)
   });
+  const media = normalizeDocumentMedia(source, input.media, id, fetchedAt);
 
   return {
     id,
@@ -72,6 +74,7 @@ export function createIntelDocument(source, input, now = new Date().toISOString(
     dedupe_key: canonicalUrl ? `url:${canonicalUrl}` : `content:${bodyHash}`,
     title_tokens: titleTokens(title),
     domains,
+    media,
     raw_metadata: metadata,
     raw_metadata_json: boundedJson(metadata)
   };

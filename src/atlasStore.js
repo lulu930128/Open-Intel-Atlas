@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { boundedJson, parseJson, redactUrl, stableId } from "./core/utils.js";
 import { initializeAtlasSchema, SCHEMA_VERSION } from "./atlasSchema.js";
 import { publicSourceDefinition } from "./atlasSourceRegistry.js";
+import { applyEffectiveMediaPolicy, selectRepresentativeMedia } from "./documents/media.js";
 
 export function openAtlasStore(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -39,10 +40,10 @@ class AtlasStore {
     const statement = this.db.prepare(`
       INSERT INTO sources (
         id, name, provider_type, source_class, authority_class, document_type, catchup_mode,
-        homepage, docs_url, attribution, policy_note, enabled, disabled_reason,
+        homepage, docs_url, attribution, policy_note, media_policy_json, enabled, disabled_reason,
         domains_json, languages_json, countries_json, cadence_ms, timeout_ms,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         provider_type = excluded.provider_type,
@@ -54,6 +55,7 @@ class AtlasStore {
         docs_url = excluded.docs_url,
         attribution = excluded.attribution,
         policy_note = excluded.policy_note,
+        media_policy_json = excluded.media_policy_json,
         enabled = excluded.enabled,
         disabled_reason = excluded.disabled_reason,
         domains_json = excluded.domains_json,
@@ -79,6 +81,7 @@ class AtlasStore {
           value.docs_url,
           value.attribution,
           value.policy_note,
+          JSON.stringify(value.media_policy || {}),
           value.enabled ? 1 : 0,
           value.disabled_reason,
           JSON.stringify(value.domains || []),
@@ -373,6 +376,10 @@ class AtlasStore {
   }
 
   upsertDocument(document, runId, rawFetchId, now = new Date().toISOString()) {
+    return this.transaction(() => this._upsertDocument(document, runId, rawFetchId, now));
+  }
+
+  _upsertDocument(document, runId, rawFetchId, now = new Date().toISOString()) {
     const byId = this.db.prepare("SELECT id FROM documents WHERE id = ?").get(document.id);
     const byDedupe = byId
       ? null
@@ -461,12 +468,82 @@ class AtlasStore {
       domainStatement.run(id, domain.domain, domain.confidence);
     }
 
+    this.upsertDocumentMedia(id, document.source_id, document.media, now);
+
     return { inserted, document: { ...document, id } };
+  }
+
+  upsertDocumentMedia(documentId, sourceId, media, now = new Date().toISOString()) {
+    if (!Array.isArray(media) || media.length === 0) return;
+    this.db.prepare("UPDATE document_media SET is_representative = 0 WHERE document_id = ?").run(documentId);
+    const statement = this.db.prepare(`
+      INSERT INTO document_media (
+        id, document_id, source_id, kind, role, url, normalized_url, thumbnail_url,
+        origin, mime_type, width, height, alt_text, attribution, rights_class,
+        display_policy, policy_version, policy_reason, is_representative,
+        first_seen_at, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(document_id, normalized_url) DO UPDATE SET
+        role = excluded.role,
+        url = excluded.url,
+        thumbnail_url = excluded.thumbnail_url,
+        origin = excluded.origin,
+        mime_type = excluded.mime_type,
+        width = excluded.width,
+        height = excluded.height,
+        alt_text = excluded.alt_text,
+        attribution = excluded.attribution,
+        rights_class = excluded.rights_class,
+        display_policy = excluded.display_policy,
+        policy_version = excluded.policy_version,
+        policy_reason = excluded.policy_reason,
+        is_representative = excluded.is_representative,
+        last_seen_at = excluded.last_seen_at
+    `);
+    for (const item of media) {
+      statement.run(
+        stableId(`media:${documentId}`, item.normalized_url),
+        documentId,
+        sourceId,
+        item.kind,
+        item.role,
+        item.url,
+        item.normalized_url,
+        item.thumbnail_url,
+        item.origin,
+        item.mime_type,
+        item.width,
+        item.height,
+        item.alt_text,
+        item.attribution,
+        item.rights_class,
+        item.display_policy,
+        item.policy_version,
+        item.policy_reason,
+        item.is_representative ? 1 : 0,
+        item.first_seen_at || now,
+        now
+      );
+    }
   }
 
   getDocument(documentId, includeMetadata = true) {
     const row = this.db
-      .prepare(`SELECT d.*, s.name AS source_name, s.authority_class, s.source_class FROM documents d JOIN sources s ON s.id = d.source_id WHERE d.id = ?`)
+      .prepare(`
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+          (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
+           FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
+          (SELECT json_object(
+            'id', dm.id, 'kind', dm.kind, 'role', dm.role, 'url', dm.url,
+            'thumbnail_url', dm.thumbnail_url, 'origin', dm.origin, 'mime_type', dm.mime_type,
+            'width', dm.width, 'height', dm.height, 'alt_text', dm.alt_text,
+            'attribution', dm.attribution, 'rights_class', dm.rights_class,
+            'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
+            'policy_reason', dm.policy_reason
+          ) FROM document_media dm
+          WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
+        FROM documents d JOIN sources s ON s.id = d.source_id WHERE d.id = ?
+      `)
       .get(documentId);
     return row ? this.documentRow(row, includeMetadata) : null;
   }
@@ -580,8 +657,19 @@ class AtlasStore {
   getStoryDocuments(storyId) {
     const rows = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class,
-               sd.similarity_score, sd.is_representative
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+               sd.similarity_score, sd.is_representative,
+               (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
+                FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
+               (SELECT json_object(
+                 'id', dm.id, 'kind', dm.kind, 'role', dm.role, 'url', dm.url,
+                 'thumbnail_url', dm.thumbnail_url, 'origin', dm.origin, 'mime_type', dm.mime_type,
+                 'width', dm.width, 'height', dm.height, 'alt_text', dm.alt_text,
+                 'attribution', dm.attribution, 'rights_class', dm.rights_class,
+                 'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
+                 'policy_reason', dm.policy_reason
+                ) FROM document_media dm
+                WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
         FROM story_documents sd
         JOIN documents d ON d.id = sd.document_id
         JOIN sources s ON s.id = d.source_id
@@ -831,18 +919,31 @@ class AtlasStore {
     }
     const rows = this.db
       .prepare(`
-        SELECT s.*, d.summary AS representative_summary
+        SELECT s.*, d.summary AS representative_summary,
+          (SELECT json_group_array(json_object('domain', dd3.domain, 'confidence', dd3.confidence))
+           FROM story_documents sd3 JOIN document_domains dd3 ON dd3.document_id = sd3.document_id
+           WHERE sd3.story_id = s.id) AS domains_json
         FROM stories s LEFT JOIN documents d ON d.id = s.representative_document_id
         WHERE ${clauses.join(" AND ")}
         ORDER BY s.last_seen_at DESC, s.id DESC LIMIT ?
       `)
       .all(...values, limit + 1);
-    return page(rows, limit, (row) => storyRow(row), "last_seen_at");
+    const mediaByStory = this.representativeMediaForStories(rows.slice(0, limit).map((row) => row.id));
+    return page(rows, limit, (row) => storyRow(row, mediaByStory.get(row.id) || null), "last_seen_at");
   }
 
   getStory(storyId) {
-    const row = this.db.prepare("SELECT * FROM stories WHERE id = ?").get(storyId);
-    return row ? { ...storyRow(row), documents: this.getStoryDocuments(storyId) } : null;
+    const row = this.db.prepare(`
+      SELECT s.*, d.summary AS representative_summary,
+        (SELECT json_group_array(json_object('domain', dd3.domain, 'confidence', dd3.confidence))
+         FROM story_documents sd3 JOIN document_domains dd3 ON dd3.document_id = sd3.document_id
+         WHERE sd3.story_id = s.id) AS domains_json
+      FROM stories s LEFT JOIN documents d ON d.id = s.representative_document_id
+      WHERE s.id = ?
+    `).get(storyId);
+    if (!row) return null;
+    const media = this.representativeMediaForStories([storyId]).get(storyId) || null;
+    return { ...storyRow(row, media), documents: this.getStoryDocuments(storyId) };
   }
 
   getStoryEvent(storyId) {
@@ -941,7 +1042,11 @@ class AtlasStore {
       .prepare(`
         SELECT e.*, d.publisher AS representative_publisher, d.canonical_url AS representative_url,
                s.name AS representative_source, el.label AS location_label, el.country_code,
-               el.latitude, el.longitude, el.geometry_type, el.precision
+               el.latitude, el.longitude, el.geometry_type, el.precision,
+               (SELECT json_group_array(json_object('domain', ed2.domain, 'confidence', ed2.confidence))
+                FROM event_domains ed2 WHERE ed2.event_id = e.id) AS domains_json,
+               (SELECT json_group_array(ee2.document_id)
+                FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json
         FROM events e
         LEFT JOIN documents d ON d.id = e.representative_document_id
         LEFT JOIN sources s ON s.id = d.source_id
@@ -950,7 +1055,8 @@ class AtlasStore {
         ORDER BY e.last_updated_at DESC, e.id DESC LIMIT ?
       `)
       .all(...values, limit + 1);
-    return page(rows, limit, (row) => this.eventRow(row), "last_updated_at");
+    const mediaByEvent = this.representativeMediaForEvents(rows.slice(0, limit).map((row) => row.id));
+    return page(rows, limit, (row) => this.eventRow(row, mediaByEvent.get(row.id) || null), "last_updated_at");
   }
 
   getEvent(eventId) {
@@ -958,24 +1064,51 @@ class AtlasStore {
       .prepare(`
         SELECT e.*, d.publisher AS representative_publisher, d.canonical_url AS representative_url,
                s.name AS representative_source, el.label AS location_label, el.country_code,
-               el.latitude, el.longitude, el.geometry_type, el.precision
+               el.latitude, el.longitude, el.geometry_type, el.precision,
+               (SELECT json_group_array(json_object('domain', ed2.domain, 'confidence', ed2.confidence))
+                FROM event_domains ed2 WHERE ed2.event_id = e.id) AS domains_json,
+               (SELECT json_group_array(ee2.document_id)
+                FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json
         FROM events e
         LEFT JOIN documents d ON d.id = e.representative_document_id
         LEFT JOIN sources s ON s.id = d.source_id
         LEFT JOIN event_locations el ON el.event_id = e.id AND el.is_primary = 1
         WHERE e.id = ?
-      `)
+    `)
       .get(eventId);
     if (!row) return null;
-    const event = this.eventRow(row);
-    const stories = this.db
-      .prepare("SELECT s.*, es.relationship, es.confidence AS relationship_confidence FROM event_stories es JOIN stories s ON s.id = es.story_id WHERE es.event_id = ?")
-      .all(eventId)
-      .map((story) => ({ ...storyRow(story), relationship: story.relationship, relationship_confidence: Number(story.relationship_confidence) }));
+    const eventMedia = this.representativeMediaForEvents([eventId]).get(eventId) || null;
+    const event = this.eventRow(row, eventMedia);
+    const storyRows = this.db
+      .prepare(`
+        SELECT s.*, es.relationship, es.confidence AS relationship_confidence,
+          d.summary AS representative_summary
+        FROM event_stories es JOIN stories s ON s.id = es.story_id
+        LEFT JOIN documents d ON d.id = s.representative_document_id
+        WHERE es.event_id = ?
+      `)
+      .all(eventId);
+    const mediaByStory = this.representativeMediaForStories(storyRows.map((story) => story.id));
+    const stories = storyRows.map((story) => ({
+      ...storyRow(story, mediaByStory.get(story.id) || null),
+      relationship: story.relationship,
+      relationship_confidence: Number(story.relationship_confidence)
+    }));
     const evidence = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class,
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
                ee.evidence_role, ee.supports, ee.confidence AS evidence_confidence
+               ,(SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
+                 FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json
+               ,(SELECT json_object(
+                 'id', dm.id, 'kind', dm.kind, 'role', dm.role, 'url', dm.url,
+                 'thumbnail_url', dm.thumbnail_url, 'origin', dm.origin, 'mime_type', dm.mime_type,
+                 'width', dm.width, 'height', dm.height, 'alt_text', dm.alt_text,
+                 'attribution', dm.attribution, 'rights_class', dm.rights_class,
+                 'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
+                 'policy_reason', dm.policy_reason
+                ) FROM document_media dm
+                WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
         FROM event_evidence ee JOIN documents d ON d.id = ee.document_id JOIN sources s ON s.id = d.source_id
         WHERE ee.event_id = ? ORDER BY ee.confidence DESC, d.published_at DESC
       `)
@@ -1029,7 +1162,8 @@ class AtlasStore {
         WHERE ee.entity_id = ? ORDER BY e.last_updated_at DESC LIMIT ?
       `)
       .all(entityId, clampLimit(filters.limit));
-    return { entity: entityRow(entity), events: rows.map((row) => this.eventRow(row)) };
+    const mediaByEvent = this.representativeMediaForEvents(rows.map((row) => row.id));
+    return { entity: entityRow(entity), events: rows.map((row) => this.eventRow(row, mediaByEvent.get(row.id) || null)) };
   }
 
   search(query, limit = 30) {
@@ -1046,7 +1180,7 @@ class AtlasStore {
 
   getStats() {
     const counts = {};
-    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "stories", "story_updates", "events", "entities"]) {
+    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "document_media", "stories", "story_updates", "events", "entities"]) {
       counts[table] = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count || 0);
     }
     const lastRun = this.db.prepare("SELECT MAX(finished_at) AS value FROM source_runs").get().value || null;
@@ -1103,7 +1237,18 @@ class AtlasStore {
     }
     const rows = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+          (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
+           FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
+          (SELECT json_object(
+            'id', dm.id, 'kind', dm.kind, 'role', dm.role, 'url', dm.url,
+            'thumbnail_url', dm.thumbnail_url, 'origin', dm.origin, 'mime_type', dm.mime_type,
+            'width', dm.width, 'height', dm.height, 'alt_text', dm.alt_text,
+            'attribution', dm.attribution, 'rights_class', dm.rights_class,
+            'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
+            'policy_reason', dm.policy_reason
+          ) FROM document_media dm
+          WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
         FROM documents d JOIN sources s ON s.id = d.source_id
         WHERE ${clauses.join(" AND ")}
         ORDER BY COALESCE(d.published_at, d.observed_at, d.fetched_at) DESC, d.id DESC LIMIT ?
@@ -1112,7 +1257,48 @@ class AtlasStore {
     return page(rows, limit, (row) => this.documentRow(row, includeMetadata), (row) => row.published_at || row.observed_at || row.fetched_at);
   }
 
+  representativeMediaForStories(storyIds) {
+    const ids = [...new Set((storyIds || []).filter(Boolean))];
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.db.prepare(`
+      SELECT sd.story_id AS scope_id, story.representative_document_id AS preferred_document_id,
+             sd.similarity_score AS evidence_confidence, dm.*, source.media_policy_json AS source_policy_json
+      FROM story_documents sd
+      JOIN stories story ON story.id = sd.story_id
+      JOIN document_media dm ON dm.document_id = sd.document_id AND dm.is_representative = 1
+      JOIN sources source ON source.id = dm.source_id
+      WHERE sd.story_id IN (${placeholders})
+    `).all(...ids);
+    return selectScopedRepresentativeMedia(rows);
+  }
+
+  representativeMediaForEvents(eventIds) {
+    const ids = [...new Set((eventIds || []).filter(Boolean))];
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.db.prepare(`
+      SELECT ee.event_id AS scope_id, event.representative_document_id AS preferred_document_id,
+             ee.confidence AS evidence_confidence, dm.*, source.media_policy_json AS source_policy_json
+      FROM event_evidence ee
+      JOIN events event ON event.id = ee.event_id
+      JOIN document_media dm ON dm.document_id = ee.document_id AND dm.is_representative = 1
+      JOIN sources source ON source.id = dm.source_id
+      WHERE ee.event_id IN (${placeholders})
+    `).all(...ids);
+    return selectScopedRepresentativeMedia(rows);
+  }
+
   documentRow(row, includeMetadata) {
+    const sourcePolicy = parseJson(row.media_policy_json, {});
+    const persistedRepresentative = parseJson(row.representative_media_json);
+    const representativeMedia = persistedRepresentative
+      ? applyEffectiveMediaPolicy({
+          ...persistedRepresentative,
+          document_id: persistedRepresentative.document_id || row.id,
+          source_id: persistedRepresentative.source_id || row.source_id
+        }, sourcePolicy)
+      : null;
     const document = {
       id: row.id,
       source_id: row.source_id,
@@ -1132,7 +1318,9 @@ class AtlasStore {
       author: row.author,
       publisher: row.publisher,
       publisher_key: row.publisher_key,
-      domains: this.db.prepare("SELECT domain, confidence FROM document_domains WHERE document_id = ? ORDER BY confidence DESC").all(row.id).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) })),
+      domains: row.domains_json
+        ? parseJson(row.domains_json, []).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) }))
+        : this.db.prepare("SELECT domain, confidence FROM document_domains WHERE document_id = ? ORDER BY confidence DESC").all(row.id).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) })),
       event_key: row.event_key,
       event_type_candidate: row.event_type_candidate,
       raw_severity: row.raw_severity,
@@ -1140,20 +1328,29 @@ class AtlasStore {
       location: parseJson(row.location_json),
       tags: parseJson(row.tags_json, []),
       first_seen_at: row.first_seen_at,
-      last_seen_at: row.last_seen_at
+      last_seen_at: row.last_seen_at,
+      representative_media: mediaRow(representativeMedia)
     };
-    if (includeMetadata) document.raw_metadata = parseJson(row.raw_metadata_json, {});
+    if (includeMetadata) {
+      document.raw_metadata = parseJson(row.raw_metadata_json, {});
+      document.media = this.db
+        .prepare("SELECT * FROM document_media WHERE document_id = ? ORDER BY is_representative DESC, id")
+        .all(row.id)
+        .map((media) => mediaRow(applyEffectiveMediaPolicy(media, sourcePolicy)));
+    }
     return document;
   }
 
-  eventRow(row) {
+  eventRow(row, representativeMedia) {
     return {
       id: row.id,
       event_type: row.event_type,
       title: row.title,
       summary: row.summary,
       primary_domain: row.primary_domain,
-      domains: this.db.prepare("SELECT domain, confidence FROM event_domains WHERE event_id = ? ORDER BY confidence DESC").all(row.id).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) })),
+      domains: row.domains_json
+        ? parseJson(row.domains_json, []).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) }))
+        : this.db.prepare("SELECT domain, confidence FROM event_domains WHERE event_id = ? ORDER BY confidence DESC").all(row.id).map((entry) => ({ domain: entry.domain, confidence: Number(entry.confidence) })),
       lifecycle: row.lifecycle,
       verification_status: row.verification_status,
       event_severity: row.event_severity,
@@ -1172,6 +1369,8 @@ class AtlasStore {
       representative_source: row.representative_source || null,
       representative_publisher: row.representative_publisher || null,
       representative_url: row.representative_url || null,
+      representative_media: mediaRow(representativeMedia === undefined ? parseJson(row.representative_media_json) : representativeMedia),
+      evidence_ids: parseJson(row.evidence_ids_json, []),
       location: row.location_label
         ? {
             label: row.location_label,
@@ -1215,6 +1414,7 @@ function sourceRow(row) {
     docs_url: row.docs_url,
     attribution: row.attribution,
     policy_note: row.policy_note,
+    media_policy: parseJson(row.media_policy_json, {}),
     enabled: Boolean(row.enabled),
     disabled_reason: row.disabled_reason,
     domains: parseJson(row.domains_json, []),
@@ -1273,7 +1473,7 @@ function initialNextDue(now, lastSuccessAt, cadenceMs, collectOnStart) {
   return new Date(nowMs + cadence).toISOString();
 }
 
-function storyRow(row) {
+function storyRow(row, representativeMedia) {
   return {
     id: row.id,
     canonical_title: row.canonical_title,
@@ -1284,11 +1484,69 @@ function storyRow(row) {
     last_seen_at: row.last_seen_at,
     document_count: Number(row.document_count || 0),
     independent_source_count: Number(row.independent_source_count || 0),
+    domains: uniqueDomains(parseJson(row.domains_json, [])),
     cluster_method: row.cluster_method,
     cluster_version: row.cluster_version,
     representative_document_id: row.representative_document_id,
-    merged_into_story_id: row.merged_into_story_id || null
+    merged_into_story_id: row.merged_into_story_id || null,
+    representative_media: mediaRow(representativeMedia === undefined ? parseJson(row.representative_media_json) : representativeMedia)
   };
+}
+
+function mediaRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    document_id: row.document_id || null,
+    source_id: row.source_id || null,
+    kind: row.kind,
+    role: row.role,
+    url: row.url,
+    thumbnail_url: row.thumbnail_url || null,
+    origin: row.origin,
+    mime_type: row.mime_type || null,
+    width: row.width === null || row.width === undefined ? null : Number(row.width),
+    height: row.height === null || row.height === undefined ? null : Number(row.height),
+    alt_text: row.alt_text || null,
+    attribution: row.attribution || null,
+    rights_class: row.rights_class,
+    display_policy: row.display_policy,
+    policy_version: row.policy_version,
+    policy_reason: row.policy_reason,
+    is_representative: row.is_representative === undefined ? true : Boolean(row.is_representative)
+  };
+}
+
+function selectScopedRepresentativeMedia(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const candidates = grouped.get(row.scope_id) || [];
+    candidates.push({
+      ...row,
+      current_source_policy: parseJson(row.source_policy_json, {})
+    });
+    grouped.set(row.scope_id, candidates);
+  }
+
+  const selected = new Map();
+  for (const [scopeId, candidates] of grouped) {
+    selected.set(scopeId, selectRepresentativeMedia(candidates, {
+      preferredDocumentId: candidates[0]?.preferred_document_id || null
+    }));
+  }
+  return selected;
+}
+
+function uniqueDomains(values) {
+  const result = new Map();
+  for (const value of Array.isArray(values) ? values : []) {
+    if (!value?.domain) continue;
+    const confidence = Number(value.confidence || 0);
+    result.set(value.domain, Math.max(result.get(value.domain) || 0, confidence));
+  }
+  return [...result.entries()]
+    .map(([domain, confidence]) => ({ domain, confidence }))
+    .sort((left, right) => right.confidence - left.confidence);
 }
 
 function storyUpdateRow(row) {

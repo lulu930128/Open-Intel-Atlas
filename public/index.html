@@ -41,8 +41,8 @@
       </div>
       <nav class="desk-nav" aria-label="新聞領域">
         <div class="page-shell desk-nav__inner">
-          <a href="#latest">最新</a><a href="#domain-politics">政治</a><a href="#domain-technology">科技發展</a>
-          <a href="#domain-finance">金融</a><a href="#domain-hazards">氣象與災害</a>
+          <a href="#latest">最新</a><a href="/domain.html?domain=politics">政治</a><a href="/domain.html?domain=technology">科技發展</a>
+          <a href="/domain.html?domain=finance">金融</a><a href="/domain.html?domain=hazards">氣象與災害</a>
           <button type="button" data-open-status>資料說明</button>
         </div>
       </nav>
@@ -94,28 +94,14 @@
         </aside>
       </section>
 
-      <section class="domain-section" aria-labelledby="domain-heading">
+      <section class="domain-section" id="domains" aria-labelledby="domain-heading">
         <div class="section-heading section-heading--wide">
-          <div><p class="section-index">03 / DOMAIN DESKS</p><h2 id="domain-heading">四個觀察面向</h2></div>
-          <p class="section-note">各版只顯示該領域目前可取得的事件；空白也是資料狀態的一部分。</p>
+          <div><p class="section-index">03 / DOMAIN COMPASS</p><h2 id="domain-heading">選一個觀察方向</h2></div>
+          <p class="section-note">首頁只保留各領域的最新訊號；完整事件流、來源健康與資料缺口放在各自版面。</p>
         </div>
-        <div class="domain-grid">
-          <section class="domain-desk" id="domain-politics" data-domain-section="politics">
-            <header><p>POLITICS</p><h3>政治</h3><span data-domain-freshness="politics">檢查中</span></header>
-            <div class="domain-desk__stories" data-domain-list="politics" aria-live="polite"><div class="loading-row"></div></div>
-          </section>
-          <section class="domain-desk" id="domain-technology" data-domain-section="technology">
-            <header><p>TECHNOLOGY</p><h3>科技發展</h3><span data-domain-freshness="technology">檢查中</span></header>
-            <div class="domain-desk__stories" data-domain-list="technology" aria-live="polite"><div class="loading-row"></div></div>
-          </section>
-          <section class="domain-desk" id="domain-finance" data-domain-section="finance">
-            <header><p>FINANCE</p><h3>金融</h3><span data-domain-freshness="finance">檢查中</span></header>
-            <div class="domain-desk__stories" data-domain-list="finance" aria-live="polite"><div class="loading-row"></div></div>
-          </section>
-          <section class="domain-desk" id="domain-hazards" data-domain-section="hazards">
-            <header><p>WEATHER / HAZARDS</p><h3>氣象與災害</h3><span data-domain-freshness="hazards">檢查中</span></header>
-            <div class="domain-desk__stories" data-domain-list="hazards" aria-live="polite"><div class="loading-row"></div></div>
-          </section>
+        <div class="domain-compass" id="domain-overview" aria-live="polite" aria-busy="true">
+          <div class="domain-entry domain-entry--loading"></div><div class="domain-entry domain-entry--loading"></div>
+          <div class="domain-entry domain-entry--loading"></div><div class="domain-entry domain-entry--loading"></div>
         </div>
       </section>
 
