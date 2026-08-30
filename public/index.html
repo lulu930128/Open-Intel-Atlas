@@ -55,6 +55,21 @@
         <button type="button" data-open-status>查看缺口</button>
       </section>
 
+      <section class="brief-lens" aria-labelledby="brief-lens-title">
+        <div class="brief-lens__copy">
+          <p class="section-index" id="brief-lens-title">摘要視角</p>
+          <p id="brief-lens-description">依全域品質、時效與查證狀態選出摘要。</p>
+        </div>
+        <fieldset class="brief-lens__options" id="brief-lens-options" disabled>
+          <legend class="visually-hidden">選擇本期摘要的地區視角</legend>
+          <label><input type="radio" name="presentation" value="global" checked /><span>全球</span></label>
+          <label><input type="radio" name="presentation" value="east_asia" /><span>東亞</span></label>
+          <label><input type="radio" name="presentation" value="taiwan_focus" /><span>台灣</span></label>
+          <label><input type="radio" name="presentation" value="japan_focus" /><span>日本</span></label>
+        </fieldset>
+        <p class="brief-lens__status" id="brief-lens-status" role="status" aria-live="polite">正在讀取摘要選擇結果…</p>
+      </section>
+
       <section class="hero-grid" aria-label="本期頭條與最新事件">
         <article class="lead-story" id="lead-story" aria-live="polite" aria-busy="true">
           <div class="loading-block loading-block--lead" aria-label="正在載入頭條"></div>

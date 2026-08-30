@@ -82,6 +82,16 @@ input:focus-visible {
   outline-offset: 3px;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}
+
 .skip-link {
   position: fixed;
   z-index: 100;
@@ -326,6 +336,113 @@ input:focus-visible {
   color: var(--navy);
   font-size: 12px;
   font-weight: 700;
+}
+
+.brief-lens {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(360px, 1.25fr) minmax(260px, 1fr);
+  align-items: stretch;
+  border-bottom: 1px solid var(--ink);
+}
+
+.brief-lens__copy,
+.brief-lens__status {
+  display: grid;
+  align-content: center;
+  padding: 14px 18px;
+}
+
+.brief-lens__copy {
+  padding-left: 0;
+}
+
+.brief-lens__copy .section-index {
+  color: var(--signal);
+}
+
+.brief-lens__copy > p:last-child {
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.brief-lens__options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  border-left: 1px solid var(--line-dark);
+  padding: 0;
+}
+
+.brief-lens__options label {
+  min-width: 0;
+  cursor: pointer;
+}
+
+.brief-lens__options input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.brief-lens__options span {
+  display: grid;
+  min-height: 68px;
+  place-items: center;
+  border-right: 1px solid var(--line-dark);
+  color: var(--navy);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.brief-lens__options input:checked + span {
+  background: var(--navy);
+  color: #fff;
+}
+
+.brief-lens__options input:focus-visible + span {
+  position: relative;
+  z-index: 1;
+  outline: 3px solid var(--signal);
+  outline-offset: -3px;
+}
+
+.brief-lens__options label:hover span {
+  background: var(--signal-soft);
+  color: var(--navy-deep);
+}
+
+.brief-lens__options label:hover input:checked + span {
+  background: var(--navy-deep);
+  color: #fff;
+}
+
+.brief-lens__options:disabled label {
+  cursor: wait;
+}
+
+.brief-lens__options:disabled span {
+  opacity: 0.62;
+}
+
+.brief-lens__status {
+  border-left: 1px solid var(--line-dark);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.brief-lens__status[data-state="gap"] {
+  color: var(--warn);
+}
+
+.brief-lens__status[data-state="error"] {
+  color: var(--bad);
 }
 
 .hero-grid {
@@ -1609,6 +1726,18 @@ dialog::backdrop {
     grid-column: 2;
     justify-self: start;
   }
+
+  .brief-lens {
+    grid-template-columns: minmax(180px, 0.65fr) minmax(360px, 1.35fr);
+  }
+
+  .brief-lens__status {
+    grid-column: 1 / -1;
+    min-height: 38px;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    padding-left: 0;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1679,6 +1808,37 @@ dialog::backdrop {
 
   .signal-ribbon__label {
     grid-column: 1 / -1;
+  }
+
+  .brief-lens {
+    grid-template-columns: 1fr;
+  }
+
+  .brief-lens__copy,
+  .brief-lens__status {
+    padding-inline: 0;
+  }
+
+  .brief-lens__copy {
+    padding-block: 13px 11px;
+  }
+
+  .brief-lens__options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid var(--line-dark);
+    border-left: 1px solid var(--line-dark);
+  }
+
+  .brief-lens__options span {
+    min-height: 44px;
+    border-bottom: 1px solid var(--line-dark);
+  }
+
+  .brief-lens__status {
+    grid-column: auto;
+    min-height: 0;
+    border-top: 0;
+    padding-block: 11px 14px;
   }
 
   .hero-grid,

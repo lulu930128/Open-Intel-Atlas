@@ -1,9 +1,71 @@
-import { asArray, cleanText, safeNumber } from "./core/utils.js";
+import { asArray, cleanText, safeNumber, toIsoTimestamp } from "./core/utils.js";
 import { sourceFetchResult } from "./atlasContracts.js";
-import { walkObjects } from "./atlasParsers.js";
+import { parseFeedItems, readTag, walkObjects } from "./atlasParsers.js";
 import { createIntelDocument, dedupeDocuments } from "./documents/normalize.js";
 
 export const hazardSources = [
+  {
+    id: "tw-ncdr-active-cap-alerts",
+    name: "Taiwan NCDR Active CAP Alerts",
+    providerType: "atom_xml",
+    sourceClass: "official_aggregator",
+    authorityClass: "official",
+    documentType: "hazard_observation",
+    domains: ["hazards"],
+    languages: ["zh-TW"],
+    countries: ["TW"],
+    homepage: "https://alerts.ncdr.nat.gov.tw/",
+    docsUrl: "https://alerts.ncdr.nat.gov.tw/web/developer/alerts-rss",
+    attribution: "民生示警公開資料平台 / 原發布機關",
+    policyNote: "Official active CAP index. Atlas requires the feed-level Public Domain declaration, performs one bounded fetch, preserves the originating agency and CAP lifecycle, and never infers Event location from free text.",
+    cadenceMs: 5 * 60 * 1000,
+    catchupMode: "latest_only",
+    timeoutMs: 15000,
+    defaultEnabled: true,
+    requiredConfig: [],
+    run: fetchNcdrActiveCapAlerts
+  },
+  {
+    id: "jp-jma-eqvol",
+    name: "Japan Meteorological Agency Earthquake and Volcano XML",
+    providerType: "atom_xml",
+    sourceClass: "official_api",
+    authorityClass: "official",
+    documentType: "hazard_observation",
+    domains: ["hazards"],
+    languages: ["ja"],
+    countries: ["JP"],
+    homepage: "https://www.jma.go.jp/",
+    docsUrl: "https://xml.kishou.go.jp/xmlpull.html",
+    attribution: "気象庁",
+    policyNote: "Official JMAXML observations. The Atom feed is only an index; Atlas fetches at most six actual earthquake, tsunami, or eruption reports and preserves EventID, InfoType and Serial lineage.",
+    cadenceMs: 5 * 60 * 1000,
+    catchupMode: "provider_history",
+    timeoutMs: 12000,
+    defaultEnabled: true,
+    requiredConfig: [],
+    run: fetchJmaEqvol
+  },
+  {
+    id: "jp-fdma-disaster-info",
+    name: "Japan FDMA Disaster Information RSS",
+    providerType: "rss",
+    sourceClass: "official_feed",
+    authorityClass: "official",
+    documentType: "official_statement",
+    domains: ["hazards"],
+    languages: ["ja"],
+    countries: ["JP"],
+    homepage: "https://www.fdma.go.jp/disaster/",
+    docsUrl: "https://www.fdma.go.jp/about/rss.html",
+    attribution: "総務省消防庁",
+    policyNote: "Official disaster-response and damage-update evidence. Provider fragment IDs are preserved as record identity; source scope may add JP relevance but never fabricates an Event country.",
+    cadenceMs: 15 * 60 * 1000,
+    timeoutMs: 12000,
+    defaultEnabled: true,
+    requiredConfig: [],
+    run: fetchFdmaDisasterInfo
+  },
   {
     id: "usgs-earthquake",
     name: "USGS Earthquake Hazards",
@@ -126,6 +188,274 @@ export const hazardSources = [
     run: fetchNwsAlerts
   }
 ];
+
+async function fetchNcdrActiveCapAlerts({ source, http, now }) {
+  const startedAt = now();
+  const fetch = await http.getText("https://alerts.ncdr.nat.gov.tw/RssAtomFeeds.ashx", {
+    timeoutMs: source.timeoutMs,
+    retries: 0
+  });
+  const rights = cleanText(readTag(fetch.data, "rights"), 100);
+  if (rights.toLowerCase() !== "public domain") {
+    throw new Error("NCDR CAP feed rights are not Public Domain; ingestion stopped fail-closed");
+  }
+
+  const fetchedAt = now();
+  const documents = parseFeedItems(fetch.data)
+    .sort((left, right) => feedTimestamp(right.publishedAt) - feedTimestamp(left.publishedAt))
+    .slice(0, 100)
+    .map((item) => {
+      const status = cleanText(readTag(item.raw, "cap:status"), 50) || null;
+      const messageType = cleanText(readTag(item.raw, "cap:msgType"), 50) || null;
+      const effective = cleanText(readTag(item.raw, "cap:effective"), 100) || null;
+      const expires = cleanText(readTag(item.raw, "cap:expires"), 100) || null;
+      const externalId = cleanText(item.id, 500) || null;
+      const canonicalUrl = resolveNcdrCapUrl(item.link);
+      const eventEligible = status === "Actual"
+        && ["Alert", "Update"].includes(messageType)
+        && Boolean(externalId && canonicalUrl);
+      const category = item.categories[0] || item.title || "示警";
+      const publisher = cleanText(item.author, 300) || "民生示警公開資料平台";
+
+      return createIntelDocument(
+        source,
+        {
+          externalId,
+          canonicalUrl,
+          title: ncdrAlertTitle(category, publisher, item.description),
+          summary: item.description || `${publisher}發布${category}示警。`,
+          publishedAt: item.publishedAt,
+          observedAt: parseTaiwanLocalizedTimestamp(effective, item.publishedAt),
+          fetchedAt,
+          publisher,
+          publisherKey: ncdrPublisherKey(publisher),
+          language: "zh-TW",
+          domains: [{ domain: "hazards", confidence: 1 }],
+          eventTypeCandidate: ncdrHazardType(`${category} ${item.description || ""}`),
+          eventKey: eventEligible ? `ncdr-cap:${externalId}` : null,
+          tags: ["taiwan", "ncdr", "cap", category, status, messageType],
+          rawMetadata: {
+            event_eligible: eventEligible,
+            source_scope: "TW",
+            provider_record_id: externalId,
+            originating_agency: publisher,
+            aggregator: "NCDR Civil Alert Public Data Platform",
+            rights,
+            cap_status: status,
+            cap_message_type: messageType,
+            cap_effective: parseTaiwanLocalizedTimestamp(effective, null),
+            cap_expires: parseTaiwanLocalizedTimestamp(expires, null)
+          }
+        },
+        fetchedAt
+      );
+    });
+
+  return sourceFetchResult(source, fetch, dedupeDocuments(documents), startedAt, fetchedAt);
+}
+
+async function fetchJmaEqvol({ source, http, now }) {
+  const startedAt = now();
+  const indexFetch = await http.getText("https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml", {
+    timeoutMs: source.timeoutMs
+  });
+  const entries = selectJmaEventEntries(parseFeedItems(indexFetch.data), 6);
+  const detailFetches = [];
+  const documents = [];
+
+  for (const entry of entries) {
+    if (!/^https:\/\/www\.data\.jma\.go\.jp\/developer\/xml\/data\//i.test(entry.link || "")) continue;
+    const detailFetch = await http.getText(entry.link, { timeoutMs: source.timeoutMs, retries: 0 });
+    detailFetches.push(detailFetch);
+    if (!detailFetch.data) continue;
+
+    const report = parseJmaReport(detailFetch.data, entry);
+    const fetchedAt = now();
+    documents.push(
+      createIntelDocument(
+        source,
+        {
+          externalId: entry.id || entry.link,
+          canonicalUrl: entry.link,
+          title: report.title,
+          summary: report.summary,
+          publishedAt: report.reportDateTime || entry.publishedAt,
+          observedAt: report.targetDateTime || report.reportDateTime || entry.publishedAt,
+          fetchedAt,
+          publisher: report.publishingOffice || "気象庁",
+          publisherKey: "jp-jma",
+          language: "ja",
+          domains: [{ domain: "hazards", confidence: 1 }],
+          eventTypeCandidate: report.eventType,
+          eventKey: report.eventId ? `jma:${report.eventId}` : null,
+          rawSeverity: jmaSeverity(report),
+          tags: ["japan", "jma", report.infoKind, report.infoType, report.areaName],
+          location: report.location,
+          rawMetadata: {
+            event_eligible: report.eventEligible,
+            source_scope: "JP",
+            raw_fetch_index: detailFetches.length,
+            event_id: report.eventId,
+            info_type: report.infoType,
+            info_kind: report.infoKind,
+            info_kind_version: report.infoKindVersion,
+            serial: report.serial,
+            control_status: report.controlStatus,
+            area_name: report.areaName,
+            area_code: report.areaCode,
+            magnitude: report.magnitude
+          }
+        },
+        fetchedAt
+      )
+    );
+  }
+
+  const finishedAt = now();
+  return sourceFetchResult(source, [indexFetch, ...detailFetches], dedupeDocuments(documents), startedAt, finishedAt);
+}
+
+async function fetchFdmaDisasterInfo({ source, http, now }) {
+  const startedAt = now();
+  const fetch = await http.getText("https://www.fdma.go.jp/disaster/info/index.xml", { timeoutMs: source.timeoutMs });
+  const fetchedAt = now();
+  const documents = parseFeedItems(fetch.data)
+    .slice(0, 40)
+    .map((item) => {
+      const canonicalUrl = resolveOfficialUrl(item.link, "https://www.fdma.go.jp/");
+      const externalId = cleanText(item.id || item.link, 500) || canonicalUrl;
+      const incidentId = fdmaIncidentId(externalId || canonicalUrl);
+      return createIntelDocument(
+        source,
+        {
+          externalId,
+          canonicalUrl,
+          preserveUrlFragment: true,
+          title: item.title,
+          summary: item.description || "消防庁が公表した災害の被害情報および消防機関等の対応状況。",
+          publishedAt: item.publishedAt,
+          observedAt: parseFdmaUpdatedAt(item.title, item.publishedAt),
+          fetchedAt,
+          publisher: "総務省消防庁",
+          publisherKey: "jp-fdma",
+          language: "ja",
+          domains: [{ domain: "hazards", confidence: 1 }],
+          eventTypeCandidate: hazardTypeFromText(item.title),
+          eventKey: incidentId && canonicalUrl ? `fdma:${incidentId}` : null,
+          tags: ["japan", "fdma", "disaster-response", ...item.categories],
+          rawMetadata: {
+            event_eligible: Boolean(incidentId && canonicalUrl),
+            source_scope: "JP",
+            provider_incident_id: incidentId,
+            categories: item.categories
+          }
+        },
+        fetchedAt
+      );
+    });
+
+  return sourceFetchResult(source, fetch, dedupeDocuments(documents), startedAt, fetchedAt);
+}
+
+function isJmaEventEntry(entry) {
+  return /震源・震度に関する情報|震源に関する情報|津波警報・注意報・予報|噴火速報|噴火に関する火山観測報/.test(entry.title || "");
+}
+
+function selectJmaEventEntries(entries, limit) {
+  const caps = { earthquake: 3, tsunami: 2, volcano: 3 };
+  const counts = { earthquake: 0, tsunami: 0, volcano: 0 };
+  const selected = [];
+  for (const entry of entries) {
+    if (!isJmaEventEntry(entry)) continue;
+    const category = /津波/.test(entry.title || "") ? "tsunami" : /噴火|火山/.test(entry.title || "") ? "volcano" : "earthquake";
+    if (counts[category] >= caps[category]) continue;
+    selected.push(entry);
+    counts[category] += 1;
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+function parseJmaReport(xml, entry) {
+  const head = String(xml || "").match(/<Head\b[^>]*>([\s\S]*?)<\/Head>/i)?.[1] || "";
+  const control = String(xml || "").match(/<Control\b[^>]*>([\s\S]*?)<\/Control>/i)?.[1] || "";
+  const headline = readTag(head, "Headline");
+  const area = head.match(/<Area\b[^>]*>([\s\S]*?)<\/Area>/i)?.[1]
+    || String(xml || "").match(/<Area\b[^>]*>([\s\S]*?)<\/Area>/i)?.[1]
+    || "";
+  const coordinate = readTag(area, "Coordinate")
+    || readTag(area, "jmx_eb:Coordinate")
+    || readTag(xml, "Coordinate")
+    || readTag(xml, "jmx_eb:Coordinate");
+  const point = parseJmaCoordinate(coordinate);
+  const areaName = cleanText(readTag(area, "Name"), 500) || null;
+  const infoType = cleanText(readTag(head, "InfoType"), 100) || null;
+  const infoKind = cleanText(readTag(head, "InfoKind"), 200) || cleanText(entry.title, 200);
+  const title = cleanText(readTag(head, "Title") || entry.description || entry.title, 1000);
+  const magnitudeText = readTag(xml, "jmx_eb:Magnitude");
+  const magnitude = magnitudeText ? safeNumber(magnitudeText) : null;
+
+  return {
+    title,
+    summary: cleanText(readTag(headline, "Text") || entry.description || title, 5000),
+    eventId: cleanText(readTag(head, "EventID"), 500) || null,
+    infoType,
+    infoKind,
+    infoKindVersion: cleanText(readTag(head, "InfoKindVersion"), 100) || null,
+    serial: cleanText(readTag(head, "Serial"), 100) || null,
+    controlStatus: cleanText(readTag(control, "Status"), 100) || null,
+    publishingOffice: cleanText(readTag(control, "PublishingOffice"), 300) || null,
+    reportDateTime: readTag(head, "ReportDateTime") || readTag(control, "DateTime") || null,
+    targetDateTime: readTag(head, "TargetDateTime") || readTag(xml, "EventDateTime") || null,
+    areaName,
+    areaCode: cleanText(readTag(area, "Code"), 100) || null,
+    magnitude,
+    eventType: jmaEventType(`${infoKind || ""} ${title || ""}`),
+    eventEligible: infoType !== "取消" && !/取消/.test(`${title || ""} ${entry.title || ""}`),
+    location: areaName || point
+      ? {
+          label: areaName,
+          ...(point || {}),
+          precision: point ? "jmaxml-coordinate" : "jmaxml-area",
+          confidence: point ? 1 : 0.9
+        }
+      : null
+  };
+}
+
+function parseJmaCoordinate(value) {
+  const decimal = String(value || "").match(/^([+-])(\d+(?:\.\d+)?)([+-])(\d+(?:\.\d+)?)/);
+  if (decimal) {
+    const latitude = (decimal[1] === "-" ? -1 : 1) * Number(decimal[2]);
+    const longitude = (decimal[3] === "-" ? -1 : 1) * Number(decimal[4]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+      return { latitude, longitude };
+    }
+  }
+  const match = String(value || "").match(/^([+-])(\d{2})(\d{2}(?:\.\d+)?)([+-])(\d{3})(\d{2}(?:\.\d+)?)/);
+  if (!match) return null;
+  const latitude = (match[1] === "-" ? -1 : 1) * (Number(match[2]) + Number(match[3]) / 60);
+  const longitude = (match[4] === "-" ? -1 : 1) * (Number(match[5]) + Number(match[6]) / 60);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
+}
+
+function jmaEventType(value) {
+  if (/津波/.test(value)) return "hazards.tsunami";
+  if (/噴火|火山/.test(value)) return "hazards.volcano";
+  return "hazards.earthquake";
+}
+
+function jmaSeverity(report) {
+  const text = `${report.infoKind || ""} ${report.title || ""} ${report.summary || ""}`;
+  if (/大津波警報/.test(text)) return "critical";
+  if (/津波警報|噴火速報/.test(text)) return "high";
+  if (report.magnitude !== null) {
+    if (report.magnitude >= 7) return "critical";
+    if (report.magnitude >= 6) return "high";
+    if (report.magnitude >= 5) return "medium";
+  }
+  return /噴火/.test(text) ? "medium" : "low";
+}
 
 async function fetchUsgs({ source, http, catchup, now }) {
   const startedAt = now();
@@ -475,6 +805,88 @@ function hazardTypeFromText(value) {
   if (/heat|high temperature|高溫|熱浪/.test(text)) return "hazards.heatwave";
   if (/cold|low temperature|低溫|寒流/.test(text)) return "hazards.coldwave";
   return "hazards.storm";
+}
+
+function ncdrHazardType(value) {
+  const text = String(value || "").toLowerCase();
+  if (/停電|停水|道路封閉|水庫放流|交通|鐵路|公路/.test(text)) return "hazards.infrastructure";
+  if (/疏散|避難/.test(text)) return "hazards.evacuation";
+  if (/輻射|核子事故/.test(text)) return "hazards.radiological";
+  if (/火災|火警/.test(text)) return "hazards.fire";
+  if (/雷雨|雷擊/.test(text)) return "hazards.storm";
+  const inferred = hazardTypeFromText(text);
+  return inferred === "hazards.storm" ? "hazards.alert" : inferred;
+}
+
+function feedTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function ncdrAlertTitle(category, publisher, summary) {
+  const detail = cleanText(summary, 240);
+  return detail ? `${category}｜${detail}` : `${category}｜${publisher}`;
+}
+
+function ncdrPublisherKey(value) {
+  const key = String(value || "ncdr")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  return `tw-ncdr-origin:${key || "unknown"}`;
+}
+
+function parseTaiwanLocalizedTimestamp(value, fallback) {
+  const text = String(value || "").trim();
+  const localized = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s*(上午|下午)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!localized) return toIsoTimestamp(text, fallback);
+  let hour = Number(localized[5]);
+  if (localized[4] === "下午" && hour < 12) hour += 12;
+  if (localized[4] === "上午" && hour === 12) hour = 0;
+  const month = String(Number(localized[2])).padStart(2, "0");
+  const day = String(Number(localized[3])).padStart(2, "0");
+  const hours = String(hour).padStart(2, "0");
+  const seconds = String(Number(localized[7] || 0)).padStart(2, "0");
+  return toIsoTimestamp(`${localized[1]}-${month}-${day}T${hours}:${localized[6]}:${seconds}+08:00`, fallback);
+}
+
+function resolveNcdrCapUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value), "https://alerts.ncdr.nat.gov.tw/");
+    return url.protocol === "https:"
+      && url.hostname === "alerts.ncdr.nat.gov.tw"
+      && url.pathname.startsWith("/Capstorage/")
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function fdmaIncidentId(value) {
+  const match = String(value || "").match(/#([\p{L}\p{N}._:-]+)$/u);
+  return match?.[1] || null;
+}
+
+function parseFdmaUpdatedAt(title, fallback) {
+  const match = String(title || "").match(/R\s*(\d{1,2})[.／/]\s*(\d{1,2})[.／/]\s*(\d{1,2})\s*更新/i);
+  if (!match) return fallback;
+  const year = 2018 + Number(match[1]);
+  const month = String(Number(match[2])).padStart(2, "0");
+  const day = String(Number(match[3])).padStart(2, "0");
+  return toIsoTimestamp(`${year}-${month}-${day}T00:00:00+09:00`, fallback);
+}
+
+function resolveOfficialUrl(value, baseUrl) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value), baseUrl);
+    return url.protocol === "https:" && url.hostname === "www.fdma.go.jp" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function iso3ToIso2(value) {

@@ -1,10 +1,17 @@
 import { DOMAIN_DEFINITIONS, DOMAIN_IDS } from "./atlasDomains.js";
 import { queryState } from "./atlasQueryState.js";
+import {
+  PRESENTATION_PROFILES,
+  briefCandidatePolicy,
+  regionsForPresentation,
+  selectBriefEvents,
+  validatePresentation
+} from "./atlasBriefSelector.js";
 
-export const CONSUMER_CONTRACT_VERSION = "1.1";
+export const CONSUMER_CONTRACT_VERSION = "1.2";
 
 export const PROFILE_DEFINITIONS = Object.freeze([
-  profile("brief_compact_v1", "Compact source-backed brief for Kuro and general agents."),
+  profile("brief_compact_v1", "Quality-gated source-backed brief with optional regional presentation for Kuro and general agents."),
   profile("change_feed_v1", "Ordered durable Story/Event state changes for background consumers."),
   profile("story_detail_v1", "Story timeline context with bounded normalized documents and canonical event."),
   profile("evidence_pack_v1", "Expanded event evidence for OMI and analysis consumers."),
@@ -71,11 +78,12 @@ export function createAtlasCapabilities(context) {
 
     latest(input = {}) {
       const domain = validateDomain(input.domain);
+      const country = validateCountry(input.country);
       if (input.profile && input.profile !== "latest_events_v1") {
         throw new CapabilityError(400, "invalid_profile", "latest profile must be latest_events_v1");
       }
       const limit = clampLimit(input.limit, 12);
-      const result = context.store.listEvents({ ...input, domain, limit });
+      const result = context.store.listEvents({ ...input, domain, country, limit });
       return envelope(
         "latest_events_v1",
         result.items.map(projectCompactEvent),
@@ -119,20 +127,44 @@ export function createAtlasCapabilities(context) {
 
     brief(input = {}) {
       const domain = validateDomain(input.domain);
+      const country = validateCountry(input.country);
       const limit = clampLimit(input.limit, 12);
+      const presentation = validatePresentation(input.presentation);
+      if (!presentation) {
+        throw new CapabilityError(400, "invalid_presentation", `presentation must be one of: ${PRESENTATION_PROFILES.join(", ")}`);
+      }
       const profileId = input.profile || "brief_compact_v1";
       if (!["brief_compact_v1", "evidence_pack_v1"].includes(profileId)) {
         throw new CapabilityError(400, "invalid_profile", "brief profile must be brief_compact_v1 or evidence_pack_v1");
       }
-      const summaries = context.store.listEvents({ ...input, domain, limit }).items;
+      const candidateLimit = Math.min(200, Math.max(40, limit * 8));
+      const now = new Date().toISOString();
+      const policy = briefCandidatePolicy(domain, now);
+      const candidateFilters = {
+        ...input,
+        ...policy,
+        domain,
+        country,
+        from: laterTimestamp(input.from, policy.from),
+        cursor: undefined,
+        limit: candidateLimit
+      };
+      const candidates = presentation === "global"
+        ? context.store.listEvents(candidateFilters).items
+        : context.store.listEventsByRegionalRelevance({
+            ...candidateFilters,
+            regions: regionsForPresentation(presentation)
+          }).items;
+      const selected = selectBriefEvents(candidates, { presentation, limit, now });
+      const summaries = selected.events;
       const events = profileId === "evidence_pack_v1"
         ? summaries.map((event) => context.store.getEvent(event.id) || event)
         : summaries;
       const sources = context.store.listSources();
       const data =
         profileId === "evidence_pack_v1"
-          ? { event_count: events.length, events: events.map(projectEvidenceEvent) }
-          : buildCompactBrief(events, sources);
+          ? { event_count: events.length, selection: selected.selection, events: events.map(projectEvidenceEvent) }
+          : buildCompactBrief(events, sources, selected.selection);
       return envelope(profileId, data, { domain });
     },
 
@@ -224,6 +256,15 @@ function validateDomain(value) {
   return domain;
 }
 
+export function validateCountry(value) {
+  const country = String(value || "").trim();
+  if (!country) return undefined;
+  if (!/^[a-z]{2}$/i.test(country)) {
+    throw new CapabilityError(400, "invalid_country", "country must be an ISO 3166-1 alpha-2 code");
+  }
+  return country.toUpperCase();
+}
+
 function clampLimit(value, fallback) {
   if (value === null || value === undefined || value === "") return fallback;
   const number = Number(value);
@@ -233,13 +274,19 @@ function clampLimit(value, fallback) {
   return number;
 }
 
-function buildCompactBrief(events, sources) {
+function laterTimestamp(left, right) {
+  if (!left) return right;
+  return Date.parse(left) > Date.parse(right) ? left : right;
+}
+
+function buildCompactBrief(events, sources, selection) {
   const byDomain = Object.fromEntries([...DOMAIN_IDS].map((domain) => [domain, 0]));
   for (const event of events) byDomain[event.primary_domain] = (byDomain[event.primary_domain] || 0) + 1;
   const healthy = sources.filter((source) => ["healthy", "degraded"].includes(source.health.status)).length;
   return {
     generated_at: new Date().toISOString(),
     event_count: events.length,
+    selection,
     source_health: { usable: healthy, total: sources.length },
     domain_counts: byDomain,
     highlights: events.slice(0, 8).map(projectCompactEvent)
@@ -265,7 +312,8 @@ function projectCompactEvent(event) {
     evidence_ids: event.evidence_ids || (event.evidence || []).map((entry) => entry.id || entry.document_id).filter(Boolean),
     representative_url: event.representative_url,
     representative_media: projectMedia(event.representative_media),
-    location: event.location
+    location: event.location,
+    regional_relevance: event.regional_relevance || []
   };
 }
 
@@ -318,6 +366,7 @@ function projectDocument(document) {
     source_name: document.source_name,
     source_class: document.source_class,
     authority_class: document.authority_class,
+    source_countries: document.source_countries || [],
     document_type: document.document_type,
     canonical_url: document.canonical_url,
     title: document.title,
@@ -327,6 +376,8 @@ function projectDocument(document) {
     published_at: document.published_at,
     observed_at: document.observed_at,
     publisher: document.publisher,
+    event_eligible: document.event_eligible,
+    promotion_decision: document.promotion_decision || null,
     domains: document.domains,
     tags: document.tags,
     first_seen_at: document.first_seen_at,

@@ -5,6 +5,26 @@ import { createIntelDocument, dedupeDocuments } from "./documents/normalize.js";
 
 export const technologySources = [
   {
+    id: "jp-jpcert-alerts",
+    name: "JPCERT/CC Alerts RSS",
+    providerType: "rss_rdf",
+    sourceClass: "official_feed",
+    authorityClass: "official",
+    documentType: "security_advisory",
+    domains: ["technology"],
+    languages: ["ja"],
+    countries: ["JP"],
+    homepage: "https://www.jpcert.or.jp/",
+    docsUrl: "https://www.jpcert.or.jp/rss/",
+    attribution: "JPCERT Coordination Center",
+    policyNote: "Official Japanese coordination-center evidence. CVE-bearing alerts share the canonical CVE event key; Weekly Report section entries are excluded until section identity and promotion policy are audited.",
+    cadenceMs: 30 * 60 * 1000,
+    timeoutMs: 12000,
+    defaultEnabled: true,
+    requiredConfig: [],
+    run: fetchJpcertAlerts
+  },
+  {
     id: "arxiv-ai",
     name: "arXiv AI Search",
     providerType: "atom",
@@ -161,6 +181,50 @@ async function fetchArxiv({ source, http, now }) {
       fetchedAt
     )
   );
+  return sourceFetchResult(source, fetch, dedupeDocuments(documents), startedAt, fetchedAt);
+}
+
+async function fetchJpcertAlerts({ source, http, now }) {
+  const startedAt = now();
+  const fetch = await http.getText("https://www.jpcert.or.jp/rss/jpcert.rdf", { timeoutMs: source.timeoutMs });
+  const fetchedAt = now();
+  const documents = parseFeedItems(fetch.data)
+    .filter((item) => /\/at\/\d{4}\/at\d+\.html$/i.test(item.link || ""))
+    .slice(0, 40)
+    .map((item) => {
+      const cves = [...`${item.title || ""} ${item.description || ""}`.matchAll(/CVE-\d{4}-\d{4,}/gi)]
+        .map((match) => match[0].toUpperCase())
+        .filter((value, index, values) => values.indexOf(value) === index);
+      const advisoryId = item.id || jpcertIdFromUrl(item.link);
+      return createIntelDocument(
+        source,
+        {
+          externalId: advisoryId || item.link,
+          canonicalUrl: item.link,
+          title: item.title,
+          summary: item.description,
+          publishedAt: item.publishedAt,
+          fetchedAt,
+          publisher: "JPCERT/CC",
+          publisherKey: "jpcert-cc",
+          language: "ja",
+          domains: [{ domain: "technology", confidence: 1 }],
+          eventTypeCandidate: "technology.cybersecurity",
+          eventKey: cves.length === 1 ? `cve:${cves[0]}` : advisoryId ? `jpcert:${advisoryId}` : null,
+          tags: ["japan", "jpcert", "cybersecurity", advisoryId, ...cves],
+          rawMetadata: {
+            event_eligible: false,
+            evidence_support: true,
+            source_scope: "JP",
+            advisory_id: advisoryId,
+            cves,
+            categories: item.categories
+          }
+        },
+        fetchedAt
+      );
+    });
+
   return sourceFetchResult(source, fetch, dedupeDocuments(documents), startedAt, fetchedAt);
 }
 
@@ -399,4 +463,10 @@ function primaryCvss(metrics) {
 
 function firstSentence(value) {
   return String(value || "").split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || "";
+}
+
+function jpcertIdFromUrl(value) {
+  const match = String(value || "").match(/\/(at\d+|wr\d+)\.html(?:#(\d+))?$/i);
+  if (!match) return null;
+  return match[2] ? `${match[1]}#${match[2]}` : match[1];
 }

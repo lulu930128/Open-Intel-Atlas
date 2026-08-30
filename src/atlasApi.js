@@ -160,6 +160,7 @@ export async function handleV1Api(request, response, requestUrl, context) {
     return sendJson(response, context.capabilities.brief({
       ...filters,
       limit: requestUrl.searchParams.has("limit") ? filters.limit : 12,
+      presentation: optional(requestUrl.searchParams.get("presentation")) || "global",
       profile: optional(requestUrl.searchParams.get("profile")) || "brief_compact_v1"
     }));
   }

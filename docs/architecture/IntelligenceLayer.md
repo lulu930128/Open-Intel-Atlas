@@ -27,11 +27,11 @@ Atlas 不只保存最近文章，而是將公開來源整理為可追溯、可�
 目前 source worktree 已包含：
 
 - `Source → Document → Story → Event` canonical pipeline。
-- SQLite schema v4 source/runtime、persistent scheduler、append-only `story_updates` 與 Document-owned media。
-- `/api/v1`、consumer contract `1.1` representation profiles、durable change feed。
+- SQLite schema v5 source/runtime、persistent scheduler、append-only `story_updates`、Document-owned media、PromotionDecision 與 RegionalRelevance。
+- `/api/v1`、consumer contract `1.2` representation profiles、durable change feed與 regional brief selector。
 - loopback-only read-only MCP transport。
 
-2026-08-30 live 盤點確認：`127.0.0.1:8790` 執行 `1.3.0`、實際 `data/db/atlas.sqlite` 已採用 schema v4。這只代表 local Atlas runtime adoption；OMI/Kuro consumer adoption、provider coverage 與 Intelligence Layer 新能力仍是不同 gate。
+2026-08-30 live 驗證確認：`127.0.0.1:8790` 執行 `1.3.0`、實際 `data/db/atlas.sqlite` 為 schema v5／contract `1.2`／33 sources。working tree 後續新增的 held-evidence fail-closed、brief DB prefilter 與 MCP `atlas.brief.country` 已通過 source regression，但尚未由正式 runtime 採用；OMI/Kuro consumer adoption、provider coverage、正式 backfill 與 Intelligence Layer 新能力仍是不同 gate。
 
 本架構接續現有 Backend v1 與 Consumer Gateway，不建立競爭的第二套 backend、change log 或 canonical store。
 

@@ -17,11 +17,11 @@ export function parseFeedItems(xml) {
     const media = parseFeedMedia(block);
 
     return {
-      id: readTag(block, "guid") || readTag(block, "id") || null,
+      id: readTag(block, "guid") || readTag(block, "id") || readTag(block, "dc:identifier") || null,
       title: cleanText(readTag(block, "title"), 1000),
       description: cleanText(readTag(block, "description") || readTag(block, "summary") || readTag(block, "content"), 5000),
       link: cleanText(readTag(block, "link") || atomLink, 2000),
-      publishedAt: readTag(block, "pubDate") || readTag(block, "published") || readTag(block, "updated") || null,
+      publishedAt: readTag(block, "pubDate") || readTag(block, "published") || readTag(block, "updated") || readTag(block, "dc:date") || null,
       author: authors.join(", ") || cleanText(readTag(block, "dc:creator") || readTag(block, "author"), 300),
       categories,
       media,

@@ -28,7 +28,7 @@ export function summarize(value, limit = 600) {
   return cleanText(value, limit);
 }
 
-export function canonicalizeUrl(value) {
+export function canonicalizeUrl(value, options = {}) {
   const input = String(value || "").trim();
   if (!input) {
     return null;
@@ -41,7 +41,9 @@ export function canonicalizeUrl(value) {
     }
 
     url.hostname = url.hostname.toLowerCase();
-    url.hash = "";
+    if (!options.preserveHash) {
+      url.hash = "";
+    }
 
     for (const key of [...url.searchParams.keys()]) {
       if (key.toLowerCase().startsWith("utm_") || TRACKING_QUERY_KEYS.has(key.toLowerCase())) {

@@ -19,6 +19,11 @@ import { z } from "zod";
 const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(["2026-07-28", "2025-11-25", "2025-06-18"]);
 const DOMAIN_SCHEMA = z.enum(["politics", "technology", "finance", "hazards"]);
 const SEVERITY_SCHEMA = z.enum(["low", "medium", "high", "critical"]);
+const COUNTRY_SCHEMA = z.string()
+  .trim()
+  .regex(/^[a-z]{2}$/i, "country must be an ISO 3166-1 alpha-2 code")
+  .transform((country) => country.toUpperCase());
+const PRESENTATION_SCHEMA = z.enum(["global", "east_asia", "taiwan_focus", "japan_focus"]);
 const VERIFICATION_SCHEMA = z.enum([
   "unverified",
   "single_source",
@@ -87,7 +92,7 @@ function buildAtlasMcpServer(capabilities) {
   registerTool(server, "atlas.latest", {
     title: "Latest canonical events",
     description: "Return bounded, compact, canonical events with backend-owned freshness and coverage metadata.",
-    inputSchema: eventFilterSchema()
+    inputSchema: eventFilterSchema({ country: COUNTRY_SCHEMA.optional() })
   }, capabilities.latest);
 
   registerTool(server, "atlas.search", {
@@ -112,6 +117,8 @@ function buildAtlasMcpServer(capabilities) {
     title: "Build compact brief",
     description: "Build a bounded brief for Kuro or another agent while preserving evidence and freshness limits.",
     inputSchema: eventFilterSchema({
+      country: COUNTRY_SCHEMA.optional(),
+      presentation: PRESENTATION_SCHEMA.default("global"),
       profile: z.enum(["brief_compact_v1", "evidence_pack_v1"]).default("brief_compact_v1")
     })
   }, capabilities.brief);

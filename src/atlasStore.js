@@ -6,6 +6,9 @@ import { boundedJson, parseJson, redactUrl, stableId } from "./core/utils.js";
 import { initializeAtlasSchema, SCHEMA_VERSION } from "./atlasSchema.js";
 import { publicSourceDefinition } from "./atlasSourceRegistry.js";
 import { applyEffectiveMediaPolicy, selectRepresentativeMedia } from "./documents/media.js";
+import { evaluateDocumentPromotion } from "./atlasPromotion.js";
+
+const REGIONAL_RELEVANCE_CODES = new Set(["TW", "JP", "EAST_ASIA"]);
 
 export function openAtlasStore(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -388,9 +391,7 @@ class AtlasStore {
     const inserted = !byId && !byDedupe;
     const metadata = document.raw_metadata || {};
     const location = metadata.location || null;
-    const eventEligible =
-      metadata.event_eligible === true ||
-      (metadata.event_eligible !== false && !["research", "market_observation"].includes(document.document_type));
+    const promotionDecision = evaluateDocumentPromotion(document, now);
     const statement = this.db.prepare(`
       INSERT INTO documents (
         id, source_id, source_run_id, raw_fetch_id, external_id, document_type,
@@ -454,7 +455,7 @@ class AtlasStore {
       metadata.event_key,
       metadata.event_type_candidate,
       metadata.raw_severity === null || metadata.raw_severity === undefined ? null : String(metadata.raw_severity),
-      eventEligible ? 1 : 0,
+      promotionDecision.eligible ? 1 : 0,
       location ? boundedJson(location, 8000) : null,
       JSON.stringify(metadata.tags || []),
       document.raw_metadata_json,
@@ -470,7 +471,42 @@ class AtlasStore {
 
     this.upsertDocumentMedia(id, document.source_id, document.media, now);
 
-    return { inserted, document: { ...document, id } };
+    this._saveDocumentPromotionDecision(id, promotionDecision);
+
+    return { inserted, document: { ...document, id, promotion_decision: promotionDecision } };
+  }
+
+  saveDocumentPromotionDecision(documentId, promotionDecision) {
+    return this.transaction(() => this._saveDocumentPromotionDecision(documentId, promotionDecision));
+  }
+
+  _saveDocumentPromotionDecision(documentId, promotionDecision) {
+    const document = this.db.prepare("SELECT id FROM documents WHERE id = ?").get(documentId);
+    if (!document) throw new Error(`Document not found while saving promotion decision: ${documentId}`);
+    this.db.prepare("UPDATE documents SET event_eligible = ? WHERE id = ?").run(promotionDecision.eligible ? 1 : 0, documentId);
+    this.db.prepare(`
+      INSERT INTO document_promotion_decisions (
+        document_id, status, eligible, reason_codes_json, method, version, evaluated_at, details_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(document_id) DO UPDATE SET
+        status = excluded.status,
+        eligible = excluded.eligible,
+        reason_codes_json = excluded.reason_codes_json,
+        method = excluded.method,
+        version = excluded.version,
+        evaluated_at = excluded.evaluated_at,
+        details_json = excluded.details_json
+    `).run(
+      documentId,
+      promotionDecision.status,
+      promotionDecision.eligible ? 1 : 0,
+      JSON.stringify(promotionDecision.reason_codes),
+      promotionDecision.method,
+      promotionDecision.version,
+      promotionDecision.evaluated_at,
+      boundedJson(promotionDecision.details, 8000)
+    );
+    return { document_id: documentId, promotion_decision: promotionDecision };
   }
 
   upsertDocumentMedia(documentId, sourceId, media, now = new Date().toISOString()) {
@@ -530,7 +566,7 @@ class AtlasStore {
   getDocument(documentId, includeMetadata = true) {
     const row = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.countries_json AS source_countries_json, s.media_policy_json,
           (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
            FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
           (SELECT json_object(
@@ -541,7 +577,12 @@ class AtlasStore {
             'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
             'policy_reason', dm.policy_reason
           ) FROM document_media dm
-          WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
+          WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json,
+          (SELECT json_object(
+            'status', pd.status, 'eligible', pd.eligible, 'reason_codes', json(pd.reason_codes_json),
+            'method', pd.method, 'version', pd.version, 'evaluated_at', pd.evaluated_at,
+            'details', json(pd.details_json)
+          ) FROM document_promotion_decisions pd WHERE pd.document_id = d.id) AS promotion_decision_json
         FROM documents d JOIN sources s ON s.id = d.source_id WHERE d.id = ?
       `)
       .get(documentId);
@@ -657,7 +698,7 @@ class AtlasStore {
   getStoryDocuments(storyId) {
     const rows = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.countries_json AS source_countries_json, s.media_policy_json,
                sd.similarity_score, sd.is_representative,
                (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
                 FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
@@ -669,7 +710,12 @@ class AtlasStore {
                  'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
                  'policy_reason', dm.policy_reason
                 ) FROM document_media dm
-                WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
+                 WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json,
+                (SELECT json_object(
+                  'status', pd.status, 'eligible', pd.eligible, 'reason_codes', json(pd.reason_codes_json),
+                  'method', pd.method, 'version', pd.version, 'evaluated_at', pd.evaluated_at,
+                  'details', json(pd.details_json)
+                ) FROM document_promotion_decisions pd WHERE pd.document_id = d.id) AS promotion_decision_json
         FROM story_documents sd
         JOIN documents d ON d.id = sd.document_id
         JOIN sources s ON s.id = d.source_id
@@ -810,8 +856,47 @@ class AtlasStore {
         );
       }
 
+      this._replaceEventRegionalRelevance(event.id, event.regional_relevance || []);
+
       this.recordStoryUpdate(storyId, previousState, consumerEventState(event), event.updated_at);
     });
+  }
+
+  replaceEventRegionalRelevance(eventId, relevance, now = new Date().toISOString()) {
+    return this.transaction(() => {
+      const previousState = this.getStoredEventState(eventId);
+      if (!previousState) throw new Error(`Event not found while saving regional relevance: ${eventId}`);
+      const owner = this.db.prepare(`
+        SELECT story_id FROM event_stories
+        WHERE event_id = ? ORDER BY CASE relationship WHEN 'primary' THEN 0 ELSE 1 END, story_id LIMIT 1
+      `).get(eventId);
+      if (!owner?.story_id) throw new Error(`Event ${eventId} is missing its owning Story`);
+      this._replaceEventRegionalRelevance(eventId, relevance);
+      const currentState = this.getStoredEventState(eventId);
+      const storyUpdate = this.recordStoryUpdate(owner.story_id, previousState, currentState, now);
+      return { event_id: eventId, relevance_count: relevance.length, story_update: storyUpdate };
+    });
+  }
+
+  _replaceEventRegionalRelevance(eventId, relevance) {
+    this.db.prepare("DELETE FROM event_regional_relevance WHERE event_id = ?").run(eventId);
+    const statement = this.db.prepare(`
+      INSERT INTO event_regional_relevance (
+        event_id, region_code, score, reason_codes_json, evidence_json, method, version, evaluated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const entry of relevance || []) {
+      statement.run(
+        eventId,
+        entry.region_code,
+        entry.score,
+        JSON.stringify(entry.reason_codes || []),
+        boundedJson(entry.evidence || [], 16000),
+        entry.method,
+        entry.version,
+        entry.evaluated_at
+      );
+    }
   }
 
   getStoredEventState(eventId) {
@@ -823,7 +908,16 @@ class AtlasStore {
       stories: this.db.prepare("SELECT story_id, relationship, confidence FROM event_stories WHERE event_id = ? ORDER BY relationship, story_id").all(eventId),
       evidence: this.db.prepare("SELECT document_id, evidence_role, supports, confidence FROM event_evidence WHERE event_id = ? ORDER BY document_id").all(eventId),
       entities: this.db.prepare("SELECT entity_id AS id, role, confidence FROM event_entities WHERE event_id = ? ORDER BY entity_id, role").all(eventId),
-      locations: this.db.prepare("SELECT * FROM event_locations WHERE event_id = ? ORDER BY is_primary DESC, id").all(eventId)
+      locations: this.db.prepare("SELECT * FROM event_locations WHERE event_id = ? ORDER BY is_primary DESC, id").all(eventId),
+      regional_relevance: this.db.prepare("SELECT region_code, score, reason_codes_json, evidence_json, method, version, evaluated_at FROM event_regional_relevance WHERE event_id = ? ORDER BY region_code").all(eventId).map((entry) => ({
+        region_code: entry.region_code,
+        score: Number(entry.score),
+        reason_codes: parseJson(entry.reason_codes_json, []),
+        evidence: parseJson(entry.evidence_json, []),
+        method: entry.method,
+        version: entry.version,
+        evaluated_at: entry.evaluated_at
+      }))
     });
   }
 
@@ -994,11 +1088,20 @@ class AtlasStore {
     };
   }
 
+  listEventsByRegionalRelevance(filters = {}) {
+    const regions = [...new Set((filters.regions || [])
+      .map((region) => String(region || "").trim().toUpperCase())
+      .filter((region) => REGIONAL_RELEVANCE_CODES.has(region)))];
+    if (regions.length === 0) return { items: [], next_cursor: null };
+    return this.listEvents({ ...filters, cursor: undefined, relevance_regions: regions });
+  }
+
   listEvents(filters = {}) {
     const limit = clampLimit(filters.limit);
     const cursor = decodeCursor(filters.cursor);
     const clauses = ["1 = 1"];
     const values = [];
+    const relevanceRegions = Array.isArray(filters.relevance_regions) ? filters.relevance_regions : [];
     if (filters.domain) {
       clauses.push("EXISTS (SELECT 1 FROM event_domains ed WHERE ed.event_id = e.id AND ed.domain = ?)");
       values.push(filters.domain);
@@ -1012,6 +1115,16 @@ class AtlasStore {
       if (filters[field]) {
         clauses.push(`${column} = ?`);
         values.push(filters[field]);
+      }
+    }
+    for (const [field, column] of [
+      ["exclude_lifecycles", "e.lifecycle"],
+      ["exclude_verifications", "e.verification_status"]
+    ]) {
+      const excluded = [...new Set((Array.isArray(filters[field]) ? filters[field] : []).filter(Boolean))];
+      if (excluded.length > 0) {
+        clauses.push(`${column} NOT IN (${excluded.map(() => "?").join(", ")})`);
+        values.push(...excluded);
       }
     }
     if (filters.country) {
@@ -1034,10 +1147,25 @@ class AtlasStore {
       clauses.push("(e.title LIKE ? OR e.summary LIKE ?)");
       values.push(`%${filters.q}%`, `%${filters.q}%`);
     }
+    if (relevanceRegions.length > 0) {
+      clauses.push(`EXISTS (
+        SELECT 1 FROM event_regional_relevance rr_filter
+        WHERE rr_filter.event_id = e.id
+          AND rr_filter.region_code IN (${relevanceRegions.map(() => "?").join(", ")})
+          AND rr_filter.score > 0
+      )`);
+      values.push(...relevanceRegions);
+    }
     if (cursor) {
       clauses.push("(e.last_updated_at < ? OR (e.last_updated_at = ? AND e.id < ?))");
       values.push(cursor.time, cursor.time, cursor.id);
     }
+    const regionalOrder = relevanceRegions.length > 0
+      ? `(SELECT MAX(rr_order.score) FROM event_regional_relevance rr_order
+          WHERE rr_order.event_id = e.id
+            AND rr_order.region_code IN (${relevanceRegions.map(() => "?").join(", ")})) DESC,
+         e.last_updated_at DESC, e.id DESC`
+      : "e.last_updated_at DESC, e.id DESC";
     const rows = this.db
       .prepare(`
         SELECT e.*, d.publisher AS representative_publisher, d.canonical_url AS representative_url,
@@ -1045,16 +1173,21 @@ class AtlasStore {
                el.latitude, el.longitude, el.geometry_type, el.precision,
                (SELECT json_group_array(json_object('domain', ed2.domain, 'confidence', ed2.confidence))
                 FROM event_domains ed2 WHERE ed2.event_id = e.id) AS domains_json,
-               (SELECT json_group_array(ee2.document_id)
-                FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json
+                (SELECT json_group_array(ee2.document_id)
+                 FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json,
+                (SELECT json_group_array(json_object(
+                  'region_code', rr.region_code, 'score', rr.score,
+                  'reason_codes', json(rr.reason_codes_json), 'evidence', json(rr.evidence_json),
+                  'method', rr.method, 'version', rr.version, 'evaluated_at', rr.evaluated_at
+                )) FROM event_regional_relevance rr WHERE rr.event_id = e.id) AS regional_relevance_json
         FROM events e
         LEFT JOIN documents d ON d.id = e.representative_document_id
         LEFT JOIN sources s ON s.id = d.source_id
-        LEFT JOIN event_locations el ON el.event_id = e.id AND el.is_primary = 1
-        WHERE ${clauses.join(" AND ")}
-        ORDER BY e.last_updated_at DESC, e.id DESC LIMIT ?
-      `)
-      .all(...values, limit + 1);
+         LEFT JOIN event_locations el ON el.event_id = e.id AND el.is_primary = 1
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY ${regionalOrder} LIMIT ?
+       `)
+      .all(...values, ...relevanceRegions, limit + 1);
     const mediaByEvent = this.representativeMediaForEvents(rows.slice(0, limit).map((row) => row.id));
     return page(rows, limit, (row) => this.eventRow(row, mediaByEvent.get(row.id) || null), "last_updated_at");
   }
@@ -1067,8 +1200,13 @@ class AtlasStore {
                el.latitude, el.longitude, el.geometry_type, el.precision,
                (SELECT json_group_array(json_object('domain', ed2.domain, 'confidence', ed2.confidence))
                 FROM event_domains ed2 WHERE ed2.event_id = e.id) AS domains_json,
-               (SELECT json_group_array(ee2.document_id)
-                FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json
+                (SELECT json_group_array(ee2.document_id)
+                 FROM event_evidence ee2 WHERE ee2.event_id = e.id) AS evidence_ids_json,
+                (SELECT json_group_array(json_object(
+                  'region_code', rr.region_code, 'score', rr.score,
+                  'reason_codes', json(rr.reason_codes_json), 'evidence', json(rr.evidence_json),
+                  'method', rr.method, 'version', rr.version, 'evaluated_at', rr.evaluated_at
+                )) FROM event_regional_relevance rr WHERE rr.event_id = e.id) AS regional_relevance_json
         FROM events e
         LEFT JOIN documents d ON d.id = e.representative_document_id
         LEFT JOIN sources s ON s.id = d.source_id
@@ -1096,7 +1234,7 @@ class AtlasStore {
     }));
     const evidence = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.countries_json AS source_countries_json, s.media_policy_json,
                ee.evidence_role, ee.supports, ee.confidence AS evidence_confidence
                ,(SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
                  FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json
@@ -1108,7 +1246,12 @@ class AtlasStore {
                  'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
                  'policy_reason', dm.policy_reason
                 ) FROM document_media dm
-                WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
+                 WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json,
+                (SELECT json_object(
+                  'status', pd.status, 'eligible', pd.eligible, 'reason_codes', json(pd.reason_codes_json),
+                  'method', pd.method, 'version', pd.version, 'evaluated_at', pd.evaluated_at,
+                  'details', json(pd.details_json)
+                ) FROM document_promotion_decisions pd WHERE pd.document_id = d.id) AS promotion_decision_json
         FROM event_evidence ee JOIN documents d ON d.id = ee.document_id JOIN sources s ON s.id = d.source_id
         WHERE ee.event_id = ? ORDER BY ee.confidence DESC, d.published_at DESC
       `)
@@ -1158,7 +1301,13 @@ class AtlasStore {
     if (!entity) return null;
     const rows = this.db
       .prepare(`
-        SELECT e.* FROM event_entities ee JOIN events e ON e.id = ee.event_id
+        SELECT e.*,
+          (SELECT json_group_array(json_object(
+            'region_code', rr.region_code, 'score', rr.score,
+            'reason_codes', json(rr.reason_codes_json), 'evidence', json(rr.evidence_json),
+            'method', rr.method, 'version', rr.version, 'evaluated_at', rr.evaluated_at
+          )) FROM event_regional_relevance rr WHERE rr.event_id = e.id) AS regional_relevance_json
+        FROM event_entities ee JOIN events e ON e.id = ee.event_id
         WHERE ee.entity_id = ? ORDER BY e.last_updated_at DESC LIMIT ?
       `)
       .all(entityId, clampLimit(filters.limit));
@@ -1180,7 +1329,7 @@ class AtlasStore {
 
   getStats() {
     const counts = {};
-    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "document_media", "stories", "story_updates", "events", "entities"]) {
+    for (const table of ["sources", "source_runs", "source_schedule_state", "raw_fetches", "documents", "document_promotion_decisions", "document_media", "stories", "story_updates", "events", "event_regional_relevance", "entities"]) {
       counts[table] = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count || 0);
     }
     const lastRun = this.db.prepare("SELECT MAX(finished_at) AS value FROM source_runs").get().value || null;
@@ -1237,7 +1386,7 @@ class AtlasStore {
     }
     const rows = this.db
       .prepare(`
-        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.media_policy_json,
+        SELECT d.*, s.name AS source_name, s.authority_class, s.source_class, s.countries_json AS source_countries_json, s.media_policy_json,
           (SELECT json_group_array(json_object('domain', dd.domain, 'confidence', dd.confidence))
            FROM document_domains dd WHERE dd.document_id = d.id) AS domains_json,
           (SELECT json_object(
@@ -1248,7 +1397,12 @@ class AtlasStore {
             'display_policy', dm.display_policy, 'policy_version', dm.policy_version,
             'policy_reason', dm.policy_reason
           ) FROM document_media dm
-          WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json
+           WHERE dm.document_id = d.id AND dm.is_representative = 1 LIMIT 1) AS representative_media_json,
+          (SELECT json_object(
+            'status', pd.status, 'eligible', pd.eligible, 'reason_codes', json(pd.reason_codes_json),
+            'method', pd.method, 'version', pd.version, 'evaluated_at', pd.evaluated_at,
+            'details', json(pd.details_json)
+          ) FROM document_promotion_decisions pd WHERE pd.document_id = d.id) AS promotion_decision_json
         FROM documents d JOIN sources s ON s.id = d.source_id
         WHERE ${clauses.join(" AND ")}
         ORDER BY COALESCE(d.published_at, d.observed_at, d.fetched_at) DESC, d.id DESC LIMIT ?
@@ -1305,6 +1459,7 @@ class AtlasStore {
       source_name: row.source_name,
       source_class: row.source_class,
       authority_class: row.authority_class,
+      source_countries: parseJson(row.source_countries_json, []),
       external_id: row.external_id,
       document_type: row.document_type,
       canonical_url: row.canonical_url,
@@ -1325,6 +1480,7 @@ class AtlasStore {
       event_type_candidate: row.event_type_candidate,
       raw_severity: row.raw_severity,
       event_eligible: Boolean(row.event_eligible),
+      promotion_decision: normalizePromotionDecision(parseJson(row.promotion_decision_json)),
       location: parseJson(row.location_json),
       tags: parseJson(row.tags_json, []),
       first_seen_at: row.first_seen_at,
@@ -1371,6 +1527,15 @@ class AtlasStore {
       representative_url: row.representative_url || null,
       representative_media: mediaRow(representativeMedia === undefined ? parseJson(row.representative_media_json) : representativeMedia),
       evidence_ids: parseJson(row.evidence_ids_json, []),
+      regional_relevance: parseJson(row.regional_relevance_json, []).map((entry) => ({
+        region_code: entry.region_code,
+        score: Number(entry.score),
+        reason_codes: Array.isArray(entry.reason_codes) ? entry.reason_codes : [],
+        evidence: Array.isArray(entry.evidence) ? entry.evidence : [],
+        method: entry.method,
+        version: entry.version,
+        evaluated_at: entry.evaluated_at
+      })),
       location: row.location_label
         ? {
             label: row.location_label,
@@ -1442,6 +1607,19 @@ function sourceRow(row) {
       last_catchup_from: row.last_catchup_from || null,
       last_catchup_to: row.last_catchup_to || null
     }
+  };
+}
+
+function normalizePromotionDecision(value) {
+  if (!value) return null;
+  return {
+    status: value.status,
+    eligible: Boolean(value.eligible),
+    reason_codes: Array.isArray(value.reason_codes) ? value.reason_codes : [],
+    method: value.method,
+    version: value.version,
+    evaluated_at: value.evaluated_at,
+    details: value.details && typeof value.details === "object" ? value.details : {}
   };
 }
 
@@ -1594,6 +1772,15 @@ function consumerEventState(event) {
     has_official_source: Boolean(event.has_official_source),
     evidence_ids: (event.evidence || []).map((entry) => entry.document_id).filter(Boolean).sort(),
     entity_ids: (event.entities || []).map((entry) => entry.id).filter(Boolean).sort(),
+    regional_relevance: (event.regional_relevance || [])
+      .map((entry) => ({
+        region_code: entry.region_code,
+        score: Number(entry.score),
+        reason_codes: [...(entry.reason_codes || [])].sort(),
+        method: entry.method,
+        version: entry.version
+      }))
+      .sort((left, right) => left.region_code.localeCompare(right.region_code)),
     location: primaryLocation
       ? {
           id: primaryLocation.id,
@@ -1621,6 +1808,7 @@ function changeReasonCodes(previous, current) {
   if (JSON.stringify(previous.evidence_ids) !== JSON.stringify(current.evidence_ids)) reasons.push("EVIDENCE_CHANGED");
   if (JSON.stringify(previous.entity_ids) !== JSON.stringify(current.entity_ids)) reasons.push("ENTITIES_CHANGED");
   if (JSON.stringify(previous.location) !== JSON.stringify(current.location)) reasons.push("LOCATION_CHANGED");
+  if (JSON.stringify(previous.regional_relevance) !== JSON.stringify(current.regional_relevance)) reasons.push("REGIONAL_RELEVANCE_CHANGED");
   if (previous.independent_source_count !== current.independent_source_count) reasons.push("SOURCE_INDEPENDENCE_CHANGED");
   if (previous.has_primary_source !== current.has_primary_source) reasons.push("PRIMARY_SOURCE_STATUS_CHANGED");
   if (previous.has_official_source !== current.has_official_source) reasons.push("OFFICIAL_SOURCE_STATUS_CHANGED");

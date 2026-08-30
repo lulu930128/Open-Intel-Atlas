@@ -28,7 +28,9 @@ export function createIntelDocument(source, input, now = new Date().toISOString(
     return null;
   }
 
-  const canonicalUrl = canonicalizeUrl(input.canonicalUrl || input.url);
+  const canonicalUrl = canonicalizeUrl(input.canonicalUrl || input.url, {
+    preserveHash: input.preserveUrlFragment === true
+  });
   const externalId = cleanText(input.externalId, 500) || null;
   const publishedAt = toIsoTimestamp(input.publishedAt);
   const observedAt = toIsoTimestamp(input.observedAt, publishedAt || now);

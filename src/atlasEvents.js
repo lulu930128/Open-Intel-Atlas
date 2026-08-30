@@ -1,4 +1,10 @@
 import { clamp, stableId, summarize } from "./core/utils.js";
+import {
+  deriveRegionalRelevance,
+  promotionAllowsEventCreation,
+  promotionAllowsEvidenceAttachment,
+  promotionAllowsEvidenceSupport
+} from "./atlasPromotion.js";
 
 export const EVENT_DERIVATION_METHOD = "deterministic-story-fusion";
 export const EVENT_DERIVATION_VERSION = "1.0.0";
@@ -6,38 +12,55 @@ export const EVENT_DERIVATION_VERSION = "1.0.0";
 const SEVERITY_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
 
 export function rebuildEventForStory(store, storyId, now = new Date().toISOString()) {
-  const documents = store.getStoryDocuments(storyId);
-  const eligible = documents.filter((document) => document.event_eligible);
-  if (eligible.length === 0) {
-    return null;
-  }
+  const event = deriveEventForStory(store, storyId, now);
+  if (!event) return null;
+  store.saveEvent(event);
+  return event;
+}
 
-  const representative = chooseRepresentative(eligible);
-  const domains = mergeDomains(eligible);
+export function deriveEventForStory(store, storyId, now = new Date().toISOString(), options = {}) {
+  const plannedDecisions = options.promotionDecisions || new Map();
+  const storyDocuments = store.getStoryDocuments(storyId).map((document) => ({
+    ...document,
+    promotion_decision: plannedDecisions.get(document.id) || document.promotion_decision
+  }));
+  const triggers = storyDocuments.filter((document) => promotionAllowsEventCreation(document.promotion_decision, document));
+  if (triggers.length === 0) return null;
+
+  const documents = storyDocuments.filter((document) => (
+    promotionAllowsEvidenceAttachment(document.promotion_decision, document)
+  ));
+  const evidence = documents.map((document) => ({
+    document_id: document.id,
+    evidence_role: evidenceRole(document),
+    supports: promotionAllowsEvidenceSupport(document.promotion_decision, document) && !isContradiction(document),
+    confidence: evidenceConfidence(document)
+  }));
+  const supportById = new Map(evidence.map((entry) => [entry.document_id, entry.supports]));
+  const supportingDocuments = documents.filter((document) => supportById.get(document.id));
+  const cancellations = documents.filter((document) => document.promotion_decision?.status === "cancelled");
+  const cancelled = cancellations.length > 0;
+
+  const representative = chooseRepresentative(cancelled ? cancellations : triggers);
+  const domains = mergeDomains(triggers);
   const primaryDomain = domains[0]?.domain || "politics";
   const independentKeys = new Set(
-    eligible
+    supportingDocuments
       .filter((document) => isIndependentEvidence(document))
       .map((document) => document.publisher_key)
       .filter(Boolean)
   );
-  const hasOfficial = eligible.some((document) => document.authority_class === "official");
-  const hasPrimary = eligible.some((document) => ["official", "primary_statement"].includes(document.authority_class));
-  const verification = verificationStatus(eligible, independentKeys.size, hasOfficial, hasPrimary);
-  const location = chooseLocation(eligible);
+  const hasOfficial = supportingDocuments.some((document) => document.authority_class === "official");
+  const hasPrimary = supportingDocuments.some((document) => ["official", "primary_statement"].includes(document.authority_class));
+  const verification = cancelled ? "retracted" : verificationStatus(supportingDocuments, independentKeys.size, hasOfficial, hasPrimary);
+  const location = chooseLocation(triggers);
   const eventId = stableId("event", storyId);
   const eventType = representative.event_type_candidate || inferEventType(representative, primaryDomain);
-  const severity = eligible.map(deriveSeverity).sort((left, right) => SEVERITY_ORDER[right] - SEVERITY_ORDER[left])[0] || "low";
-  const confidence = confidenceScore(eligible, independentKeys.size, hasOfficial);
-  const firstSeen = minTimestamp(eligible.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
-  const lastUpdated = maxTimestamp(eligible.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
-  const evidence = eligible.map((document) => ({
-    document_id: document.id,
-    evidence_role: evidenceRole(document),
-    supports: !isContradiction(document),
-    confidence: evidenceConfidence(document)
-  }));
-  const entities = extractEntities(eligible);
+  const severity = triggers.map(deriveSeverity).sort((left, right) => SEVERITY_ORDER[right] - SEVERITY_ORDER[left])[0] || "low";
+  const confidence = confidenceScore(supportingDocuments, independentKeys.size, hasOfficial);
+  const firstSeen = minTimestamp(triggers.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
+  const lastUpdated = maxTimestamp(documents.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
+  const entities = extractEntities(triggers);
   const locations = location
     ? [
         {
@@ -55,7 +78,7 @@ export function rebuildEventForStory(store, storyId, now = new Date().toISOStrin
     summary: summarize(representative.summary || representative.body_excerpt || representative.title, 1200),
     primary_domain: primaryDomain,
     domains,
-    lifecycle: lifecycleStatus(eligible, lastUpdated, now),
+    lifecycle: cancelled ? "cancelled" : lifecycleStatus(triggers, lastUpdated, now),
     verification_status: verification,
     event_severity: severity,
     confidence,
@@ -78,8 +101,7 @@ export function rebuildEventForStory(store, storyId, now = new Date().toISOStrin
     created_at: firstSeen,
     updated_at: now
   };
-
-  store.saveEvent(event);
+  event.regional_relevance = deriveRegionalRelevance(event, supportingDocuments, now);
   return event;
 }
 
@@ -185,6 +207,7 @@ function confidenceScore(documents, independentCount, hasOfficial) {
 }
 
 function evidenceRole(document) {
+  if (document.promotion_decision?.status === "cancelled") return "correction";
   if (document.authority_class === "official") return document.document_type === "hazard_observation" ? "observation" : "official";
   if (document.authority_class === "primary_statement") return "primary";
   if (document.document_type === "research") return "research";
@@ -197,6 +220,7 @@ function evidenceConfidence(document) {
 }
 
 function isContradiction(document) {
+  if (document.promotion_decision?.status === "cancelled") return true;
   return /correction|retraction|withdrawn|disputed/i.test(`${document.title} ${(document.tags || []).join(" ")}`);
 }
 

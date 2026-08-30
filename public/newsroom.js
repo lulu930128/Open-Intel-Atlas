@@ -1,4 +1,13 @@
 import { collapseFailedVisual, markVisualLoaded, renderVisual } from "./newsroomMedia.js";
+import {
+  PRESENTATION_DEFINITIONS,
+  briefHighlights,
+  buildBriefPath,
+  coverageGapMessages,
+  normalizePresentation,
+  presentationFromSearch
+} from "./newsroomPresentationModel.js";
+import { verificationLabel } from "./verificationLabels.js";
 
 const DOMAIN_LABELS = Object.freeze({
   politics: "政治",
@@ -27,17 +36,6 @@ const STATUS_LABELS = Object.freeze({
   disabled: "未啟用"
 });
 
-const VERIFICATION_LABELS = Object.freeze({
-  official_confirmed: "官方來源確認",
-  multi_source_confirmed: "多來源交叉確認",
-  multi_source_supported: "多來源支持",
-  source_reported: "來源已報導",
-  single_source: "單一來源報導",
-  unverified: "尚待驗證",
-  disputed: "來源有爭議",
-  unknown: "驗證狀態未知"
-});
-
 const SEVERITY_LABELS = Object.freeze({
   critical: "重大",
   high: "高",
@@ -47,6 +45,9 @@ const SEVERITY_LABELS = Object.freeze({
 });
 
 const state = {
+  presentation: presentationFromSearch(window.location.search),
+  briefLoading: true,
+  briefError: null,
   briefEnvelope: null,
   freshnessEnvelope: null,
   eventsEnvelope: null,
@@ -69,7 +70,10 @@ const elements = {
   searchForm: document.querySelector("#search-form"),
   searchResults: document.querySelector("#search-results"),
   statusDialog: document.querySelector("#status-dialog"),
-  statusContent: document.querySelector("#status-content")
+  statusContent: document.querySelector("#status-content"),
+  presentationFieldset: document.querySelector("#brief-lens-options"),
+  presentationDescription: document.querySelector("#brief-lens-description"),
+  presentationStatus: document.querySelector("#brief-lens-status")
 };
 
 function escapeHtml(value) {
@@ -158,10 +162,6 @@ function statusLabel(value) {
   return STATUS_LABELS[value] || cleanText(value, "狀態未知");
 }
 
-function verificationLabel(value) {
-  return VERIFICATION_LABELS[value] || cleanText(value, "驗證狀態未知");
-}
-
 function severityLabel(value) {
   return SEVERITY_LABELS[value] || cleanText(value, "未分級");
 }
@@ -195,16 +195,27 @@ function detailButton(type, id, label = "閱讀與查證") {
 }
 
 function renderLead() {
-  const highlights = state.briefEnvelope?.data?.highlights || [];
+  const highlights = briefHighlights(state.briefEnvelope);
   const events = state.eventsEnvelope?.data || [];
   const highlight = highlights[0];
-  const event = events.find((item) => item.id === highlight?.id) || highlight || events[0];
+  const event = events.find((item) => item.id === highlight?.id) || highlight;
 
   if (!event) {
+    const definition = PRESENTATION_DEFINITIONS[state.presentation];
+    const title = state.briefError
+      ? `${definition.label}摘要目前無法讀取`
+      : state.presentation === "global"
+        ? "目前沒有可顯示的頭條"
+        : `${definition.label}視角目前沒有合格事件`;
+    const detail = state.briefError
+      ? "頁面沒有沿用上一個視角的內容；可稍後重試或查看資料狀態。"
+      : state.presentation === "global"
+        ? "採集器可能尚未完成第一輪，或目前沒有事件進入摘要。"
+        : "Atlas 沒有用其他地區內容補滿；摘要視角列會說明目前的 coverage gap。";
     elements.lead.innerHTML = `
       <div class="empty-state">
-        <strong>目前沒有可顯示的頭條</strong>
-        <span>採集器可能尚未完成第一輪，或目前沒有事件進入摘要。</span>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(detail)}</span>
       </div>`;
     setBusy(elements.lead, false);
     return;
@@ -244,12 +255,17 @@ function renderLead() {
 }
 
 function renderLiveEvents() {
+  const highlights = briefHighlights(state.briefEnvelope);
   const events = state.eventsEnvelope?.data || [];
-  const leadId = state.briefEnvelope?.data?.highlights?.[0]?.id;
-  const visible = events.filter((event) => event.id !== leadId).slice(0, 5);
+  const visible = highlights.slice(1, 6).map((highlight) => events.find((event) => event.id === highlight.id) || highlight);
 
   if (!visible.length) {
-    elements.liveEvents.innerHTML = `<li class="empty-state"><strong>尚無後續事件</strong><span>完成下一輪採集後會自動更新。</span></li>`;
+    const definition = PRESENTATION_DEFINITIONS[state.presentation];
+    const title = state.briefError ? "摘要目前無法讀取" : `${definition.label}視角尚無後續事件`;
+    const detail = state.presentation === "global"
+      ? "本期可能只有一筆合格事件，或採集器尚未完成下一輪。"
+      : "沒有合格內容時不會改用其他地區事件填補。";
+    elements.liveEvents.innerHTML = `<li class="empty-state"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></li>`;
     setBusy(elements.liveEvents, false);
     return;
   }
@@ -396,6 +412,38 @@ function renderBriefMeta() {
     : "來源可用數尚未提供";
 }
 
+function renderPresentationControls() {
+  const definition = PRESENTATION_DEFINITIONS[state.presentation];
+  const selection = state.briefEnvelope?.data?.selection;
+  const gaps = coverageGapMessages(selection, state.presentation);
+  const selected = Number(selection?.selected_count || 0);
+  const requested = Number(selection?.requested_count || 0);
+
+  for (const input of elements.presentationFieldset?.querySelectorAll('input[name="presentation"]') || []) {
+    input.checked = input.value === state.presentation;
+  }
+  if (elements.presentationFieldset) elements.presentationFieldset.disabled = state.briefLoading;
+  elements.presentationDescription.textContent = definition.description;
+
+  if (state.briefLoading) {
+    elements.presentationStatus.dataset.state = "loading";
+    elements.presentationStatus.textContent = `正在讀取${definition.label}視角…`;
+    return;
+  }
+  if (state.briefError) {
+    elements.presentationStatus.dataset.state = "error";
+    elements.presentationStatus.textContent = `${definition.label}摘要讀取失敗；未沿用其他視角內容。`;
+    return;
+  }
+  if (gaps.length) {
+    elements.presentationStatus.dataset.state = "gap";
+    elements.presentationStatus.textContent = gaps.join(" ");
+    return;
+  }
+  elements.presentationStatus.dataset.state = "ready";
+  elements.presentationStatus.textContent = `${definition.label}視角已選出 ${selected} / ${requested} 筆合格事件。`;
+}
+
 function renderStatusDialog() {
   const envelope = envelopeFallback();
   const freshness = envelope.freshness || {};
@@ -428,6 +476,14 @@ function renderStatusDialog() {
   const clientErrors = state.errors.length
     ? `<section class="status-section"><h3>本頁讀取問題</h3>${state.errors.map((item) => `<div class="warning-row"><strong>${escapeHtml(item.scope)}</strong><code>${escapeHtml(item.message)}</code></div>`).join("")}</section>`
     : "";
+  const presentation = PRESENTATION_DEFINITIONS[state.presentation];
+  const selection = state.briefEnvelope?.data?.selection;
+  const selectionGaps = coverageGapMessages(selection, state.presentation);
+  const selectionStatus = state.briefError
+    ? "此視角讀取失敗；頁面沒有沿用其他視角內容。"
+    : selectionGaps.length
+      ? selectionGaps.join(" ")
+      : `已選出 ${Number(selection?.selected_count || 0)} / ${Number(selection?.requested_count || 0)} 筆合格事件。`;
 
   elements.statusContent.innerHTML = `
     <div class="status-overview">
@@ -442,6 +498,10 @@ function renderStatusDialog() {
     <section class="status-section">
       <h3>已知來源缺口</h3>
       ${warningRows}
+    </section>
+    <section class="status-section">
+      <h3>摘要視角</h3>
+      <div class="status-domain-row"><strong>${escapeHtml(presentation.label)}</strong><span>${escapeHtml(selectionStatus)}</span></div>
     </section>
     ${clientErrors}
     <section class="status-section">
@@ -660,11 +720,50 @@ function wireInteractions() {
   });
 
   elements.searchForm.addEventListener("submit", submitSearch);
+  elements.presentationFieldset?.addEventListener("change", (event) => {
+    const input = event.target.closest('input[name="presentation"]');
+    if (input) refreshBrief(input.value);
+  });
+}
+
+function updatePresentationUrl(presentation) {
+  const url = new URL(window.location.href);
+  if (presentation === "global") url.searchParams.delete("presentation");
+  else url.searchParams.set("presentation", presentation);
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function refreshBrief(value) {
+  const presentation = normalizePresentation(value);
+  state.presentation = presentation;
+  state.briefEnvelope = null;
+  state.briefError = null;
+  state.briefLoading = true;
+  updatePresentationUrl(presentation);
+  renderPresentationControls();
+  renderBriefMeta();
+  renderLead();
+  renderLiveEvents();
+
+  try {
+    state.briefEnvelope = await api(buildBriefPath(presentation));
+  } catch (error) {
+    state.briefError = cleanText(error?.message, "未知錯誤");
+    recordError(`${PRESENTATION_DEFINITIONS[presentation].label}摘要`, error);
+  } finally {
+    state.briefLoading = false;
+    renderPresentationControls();
+    renderFreshness();
+    renderBriefMeta();
+    renderLead();
+    renderLiveEvents();
+    renderStatusDialog();
+  }
 }
 
 async function loadHome() {
   const requests = [
-    ["本期摘要", "/api/v1/brief", (value) => { state.briefEnvelope = value; }],
+    ["本期摘要", buildBriefPath(state.presentation), (value) => { state.briefEnvelope = value; }],
     ["最新事件", "/api/v1/events?limit=12", (value) => { state.eventsEnvelope = value; }],
     ["最新報導", "/api/v1/stories?limit=8", (value) => { state.storiesEnvelope = value; }],
     ["資料狀態", "/api/v1/freshness", (value) => { state.freshnessEnvelope = value; }],
@@ -675,8 +774,12 @@ async function loadHome() {
   coreResults.forEach((result, index) => {
     const [scope, , assign] = requests[index];
     if (result.status === "fulfilled") assign(result.value);
-    else recordError(scope, result.reason);
+    else {
+      if (scope === "本期摘要") state.briefError = cleanText(result.reason?.message, "未知錯誤");
+      recordError(scope, result.reason);
+    }
   });
+  state.briefLoading = false;
 
   const domainResults = await Promise.allSettled(
     domainIds().map((domain) => api(`/api/v1/events?domain=${encodeURIComponent(domain)}&limit=2`))
@@ -691,6 +794,7 @@ async function loadHome() {
   });
 
   renderFreshness();
+  renderPresentationControls();
   renderBriefMeta();
   renderLead();
   renderLiveEvents();
@@ -700,6 +804,7 @@ async function loadHome() {
 }
 
 wireInteractions();
+renderPresentationControls();
 document.addEventListener("error", (event) => {
   collapseFailedVisual(event.target);
 }, true);

@@ -6,8 +6,9 @@ Open Intel Atlas 能在單一可信資料模型上持續蒐集多領域公開資
 
 ## 目前基線
 
-- `已存在`：Node.js 原生 HTTP server、23-source registry、canonical `Source → Document → Story → Event` pipeline、schema v4 `atlas.sqlite`、Document-owned media policy／projection、SQLite-owned persistent scheduler、durable `story_updates`、bounded catch-up、conditional GET、domain freshness、consumer contract `1.1` profiles、`/api/v1`、loopback read-only MCP、legacy projection、editorial newsroom／map UI、contract tests，以及由 current-user Windows logon task 啟動的 single-instance 托盤 owner。
-- `進行中`：Operational UI 第一個可用版本已完成 overview、事件／報導 evidence view、domain desks、search 與 system status；Consumer Gateway 已完成 Atlas 端 contract 與 local protocol proof，接著收斂 correction/retraction、OMI/Kuro 實際採用與長期營運能力。
+- `已存在（working tree）`：Node.js 原生 HTTP server、33-source registry（26 個預設可啟用；NCDR active CAP、MOFA、MOD、JPCERT、JMA、FDMA、NDL 已通過 bounded source probe，METI 因 compliant Node transport 403 而 fail closed）、canonical `Source → Document → Story → Event` pipeline、schema v5 durable `PromotionDecision`／`RegionalRelevance`、bounded copy reprocess/apply-twice gate、quality-gated regional brief selector、Newsroom 四種 presentation 控制與 visible coverage gaps、Document-owned media policy／projection、SQLite-owned persistent scheduler、durable `story_updates`、bounded catch-up、conditional GET、domain freshness、consumer contract `1.2` profiles、`/api/v1`、loopback read-only MCP、legacy projection、editorial newsroom／map UI 與 contract tests。
+- `正式 runtime 已採用既有 1.3 基線`：2026-08-30 驗證的 8790 runtime 為 1.3.0、33 sources、schema v5、consumer contract `1.2`；但 working tree 後續新增的 held-evidence fail-closed、brief DB prefilter 與 MCP `atlas.brief.country` 尚未 restart/adopt，source tests 不能當成這批差異的正式 runtime 證據。
+- `進行中`：Operational UI 第一個可用版本已完成 overview、事件／報導 evidence view、domain desks、search、system status 與 regional presentation；source-level desktop／390px isolated browser proof 已通過，正式 runtime UI adoption 仍待執行。Consumer Gateway 已完成 Atlas 端 contract 與 local protocol proof，接著收斂 correction/retraction、OMI/Kuro 實際採用與長期營運能力。
 - `尚未完成`：correction/retraction 完整流程、auth/rate limit、公網部署、OMI/Kuro runtime wiring、backup retention/restore drill 與多節點 scheduler。
 
 後續里程碑必須接續目前 canonical backend、Consumer Gateway 與既有 frontend projection，不另開互相競爭的 backend 或資料 truth。

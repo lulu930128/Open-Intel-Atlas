@@ -9,6 +9,15 @@
     "check": "node scripts/check.mjs",
     "test": "node --test --test-isolation=none",
     "verify": "npm run check && npm test",
+    "probe:regional": "node scripts/verify-regional-sources.mjs",
+    "verify:migration": "node scripts/verify-schema-migration.mjs",
+    "verify:isolated-adoption": "node scripts/verify-isolated-adoption.mjs",
+    "verify:runtime-preflight": "node scripts/verify-runtime-adoption-preflight.mjs",
+    "verify:formal-adoption": "node scripts/verify-formal-regional-adoption.mjs --phase runtime",
+    "verify:formal-acceptance": "node scripts/verify-formal-regional-adoption.mjs --phase product",
+    "verify:regional-live-copy": "node scripts/verify-regional-live-copy-adoption.mjs",
+    "audit:regional-reprocess": "node scripts/audit-regional-reprocess.mjs",
+    "verify:regional-reprocess": "node scripts/verify-regional-reprocess-copy.mjs",
     "tray:selftest": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/atlas-tray.ps1 -SelfTest"
   },
   "engines": {

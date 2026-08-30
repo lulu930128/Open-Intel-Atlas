@@ -10,7 +10,7 @@
 - 對外 versioned API 與 read-only-first MCP。
 - OMI、Kuro 與其他 agent 的一致資料供應。
 
-本文件同時描述目前實作與長期 target。2026-08-30 的 source 與 local runtime 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event` canonical pipeline、SQLite schema v4 scheduler／durable change log／Document media、consumer contract `1.1` REST profiles 與 loopback read-only MCP；逐來源 provider media terms acceptance、public auth、多實例部署、OMI/Kuro runtime adoption 及完整 correction/retraction workflow 仍屬後續範圍。
+本文件同時描述目前實作與長期 target。2026-08-30 的 source worktree 已由 `src/atlasServer.js` 執行 `Source → Document → Story → Event → Capability` canonical pipeline、SQLite schema v5 scheduler／durable change log／Document media／PromotionDecision／RegionalRelevance、consumer contract `1.2` REST profiles 與 loopback read-only MCP。當日 8790 正式 runtime 已採用 1.3.0／schema v5／contract `1.2`／33 sources；working tree 後續新增的 held-evidence fail-closed、brief DB prefilter 與 MCP `atlas.brief.country` 仍需獨立 runtime adoption。逐來源 provider media terms acceptance、public auth、多實例部署、OMI/Kuro runtime adoption 及完整跨 provider correction/retraction workflow 仍屬後續範圍。
 
 ## 2. 架構原則
 
@@ -57,9 +57,9 @@ flowchart LR
 | Raw Capture | 保存 bounded payload、hash、HTTP metadata、truncated flag | `atlas.sqlite` |
 | Normalizer | 產生 stable `Document`、URL canonicalization、time/language/text normalization | pure/testable modules |
 | Media Normalizer / Selector | 將 provider/feed 圖片正規化為 Document-owned candidate；outward projection 依 persisted + current source policy 執行 HTTPS、userinfo/IP/localhost、rights、authorization、terms/review 與 allowed-host gate，再跨 evidence deterministic 選圖 | pure/testable module + `document_media` |
-| Intelligence Pipeline | dedupe、Story clustering、Event/evidence、entity、geo、verification、brief projection | versioned pipeline jobs |
+| Intelligence Pipeline | dedupe、Story clustering、PromotionDecision、Event/evidence、entity、geo、verification、RegionalRelevance | versioned pipeline jobs |
 | Canonical Store | schema、migration、transactions、query indexes、audit lineage | SQLite WAL；達 gate 後再評估 PostgreSQL |
-| Query Service | search/filter/pagination、freshness/coverage、representation | backend capability layer |
+| Query Service | search/filter/pagination、freshness/coverage、quality-gated regional brief selector、representation | backend capability layer |
 | REST API | public versioning、auth、rate limit、HTTP semantics | 同 backend 或獨立薄 transport |
 | MCP Adapter | 少量 read-only tools/resources，轉呼叫 capability layer | 目前與 backend 同 process 的 `/mcp` 薄 transport；達隔離需求後可獨立部署 |
 | Web UI | operational briefing 與 evidence exploration | static/SPA；不得直連 provider |
@@ -75,10 +75,13 @@ flowchart TD
     D --> E{Identity / dedupe}
     E --> F[Story cluster]
     F --> G[Event + evidence links]
+    D --> P[PromotionDecision]
+    P --> G
     D --> H[Entity / location mentions]
     G --> I[Verification + severity + freshness]
     H --> I
-    I --> J[Brief / search / timeline projections]
+    I --> R[RegionalRelevance]
+    R --> J[Capability-owned brief / search / timeline projections]
     J --> K[UI / REST / MCP]
 ```
 
@@ -89,6 +92,8 @@ flowchart TD
 - 同一來源重抓的 Document identity 穩定；內容更新可建立 revision，不以新 ID 洗掉歷史。
 - Story clustering 可重算，但 external stable ID 與 merge/split history 必須可追蹤。
 - LLM 或 heuristic enrichment 保存 method/version，不覆寫 raw/normalized fields。
+- `source_country` 只描述來源 scope；`event_country` 只能由 location evidence 形成。RegionalRelevance 可使用 actor/entity/source scope，但不得覆寫或補造事件地點。
+- UI、REST transport 與 MCP adapter 不得自行重做 promotion、regional ranking、freshness gate 或 coverage gap。
 
 ## 6. Taxonomy
 
@@ -138,15 +143,16 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 
 所有 canonical timestamp 使用 UTC ISO 8601；UI 再轉換為 Asia/Taipei 或使用者時區。不得以 `ingested_at` 填補未知的 `event_start_at`。
 
-### 7.2 分離的狀態軸
+### 7.2 1.3.0 已實作的分離狀態軸
 
-| 軸 | 建議值 | 回答的問題 |
+| 軸 | Backend canonical values | 回答的問題 |
 | --- | --- | --- |
-| `verification.status` | `unverified`、`single_source`、`corroborated`、`official`、`disputed`、`retracted` | 有哪些證據支持／反駁？ |
-| `severity` | `info`、`low`、`medium`、`high`、`critical` | 若為真，潛在影響多大？ |
-| `freshness.status` | `current`、`stale`、`unknown` | 資料相對於來源 cadence 是否夠新？ |
-| `coverage.status` | `complete`、`partial`、`missing`、`disabled`、`unknown` | 預期來源有多少可用？ |
-| `pipeline.status` | `pending`、`processed`、`failed`、`superseded` | 系統處理到哪裡？ |
+| `verification_status` | `unverified`、`single_source`、`multi_source`、`primary_source_confirmed`、`official_confirmed`、`disputed`、`corrected`、`retracted` | 有哪些證據支持／反駁／修正？ |
+| `event_severity` | `low`、`medium`、`high`、`critical` | 若為真，潛在影響多大？ |
+| `freshness.status` | `current`、`stale`、`missing` | 資料相對於來源 cadence 是否夠新？ |
+| `coverage.status` | `full`、`partial`、`missing` | 預期來源有多少可用？ |
+
+上述值由 backend schema 與 query-state layer 擁有。UI、MCP 與 consumer 只能顯示或投影，不可加入 alias、改寫可信度或把未知值提升為已確認。Source health 的 `healthy`、`degraded`、`failed`、`unknown`、`disabled` 是另一條狀態軸，不應混入 coverage。
 
 `confidence` 若仍以 0..1 提供，必須附 `method`、`components` 與 `version`；UI 不可只顯示一個無法解釋的小數。
 

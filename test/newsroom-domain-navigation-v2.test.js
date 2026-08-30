@@ -8,12 +8,36 @@ import {
   domainAvailability,
   selectDomain
 } from "../public/domainPageModel.js";
+import { VERIFICATION_LABELS, verificationLabel } from "../public/verificationLabels.js";
 
 const registry = [
   { id: "politics", label_zh_hant: "政治", active: true },
   { id: "technology", label_zh_hant: "科技發展", active: true },
   { id: "archived", label_zh_hant: "封存", active: false }
 ];
+
+test("verification labels 精確覆蓋 backend canonical states", () => {
+  assert.deepEqual(Object.keys(VERIFICATION_LABELS), [
+    "unverified",
+    "single_source",
+    "multi_source",
+    "primary_source_confirmed",
+    "official_confirmed",
+    "disputed",
+    "corrected",
+    "retracted"
+  ]);
+  assert.equal(verificationLabel("multi_source"), "多來源交叉確認");
+  assert.equal(verificationLabel("primary_source_confirmed"), "第一手來源確認");
+  assert.equal(verificationLabel("corrected"), "已更正");
+  assert.equal(verificationLabel("retracted"), "已撤回");
+});
+
+test("verification labels 對未知或缺漏值 fail closed", () => {
+  assert.equal(verificationLabel("source_reported"), "驗證狀態未知");
+  assert.equal(verificationLabel("future_state"), "驗證狀態未知");
+  assert.equal(verificationLabel(null), "驗證狀態未知");
+});
 
 test("domain page 只接受 backend registry 中啟用的 canonical domain", () => {
   assert.equal(selectDomain("?domain=politics", registry)?.label_zh_hant, "政治");
@@ -68,6 +92,10 @@ test("首頁摘要與共用 domain 子頁使用分層導覽", () => {
   assert.match(domainHtml, /src="\/domain\.js"/);
   assert.match(domainHtml, /id="domain-load-more"/);
   assert.match(domainClient, /buildDomainEventsPath/);
+  assert.match(newsroom, /import \{ verificationLabel \} from "\.\/verificationLabels\.js"/);
+  assert.match(domainClient, /import \{ verificationLabel \} from "\.\/verificationLabels\.js"/);
+  assert.doesNotMatch(newsroom, /const VERIFICATION_LABELS/);
+  assert.doesNotMatch(domainClient, /const VERIFICATION_LABELS/);
   assert.match(domainClient, /\/api\/v1\/freshness\?domain=/);
   assert.match(domainClient, /\/api\/v1\/sources\?domain=/);
   assert.doesNotMatch(domainClient, /\/api\/dashboard|COUNTRY_HINTS|fetch\([^)]*https?:/);

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export function initializeAtlasSchema(db) {
   db.exec(`
@@ -128,6 +128,18 @@ export function initializeAtlasSchema(db) {
       domain TEXT NOT NULL CHECK (domain IN ('politics', 'technology', 'finance', 'hazards')),
       confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
       PRIMARY KEY (document_id, domain),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS document_promotion_decisions (
+      document_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK (status IN ('promoted', 'held', 'cancelled')),
+      eligible INTEGER NOT NULL CHECK (eligible IN (0, 1)),
+      reason_codes_json TEXT NOT NULL,
+      method TEXT NOT NULL,
+      version TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      details_json TEXT NOT NULL,
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
     );
 
@@ -289,6 +301,19 @@ export function initializeAtlasSchema(db) {
       FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS event_regional_relevance (
+      event_id TEXT NOT NULL,
+      region_code TEXT NOT NULL,
+      score REAL NOT NULL CHECK (score >= 0 AND score <= 1),
+      reason_codes_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      method TEXT NOT NULL,
+      version TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      PRIMARY KEY (event_id, region_code),
+      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS story_updates (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
@@ -326,6 +351,7 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_documents_event_key ON documents(event_key) WHERE event_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_documents_dedupe ON documents(source_id, dedupe_key);
     CREATE INDEX IF NOT EXISTS idx_document_domains_domain ON document_domains(domain, document_id);
+    CREATE INDEX IF NOT EXISTS idx_document_promotion_status ON document_promotion_decisions(status, eligible);
     CREATE INDEX IF NOT EXISTS idx_document_media_document ON document_media(document_id, is_representative DESC);
     CREATE INDEX IF NOT EXISTS idx_document_media_source ON document_media(source_id, last_seen_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_document_media_one_representative
@@ -340,6 +366,7 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_entity_aliases_alias ON entity_aliases(alias);
     CREATE INDEX IF NOT EXISTS idx_event_entities_entity ON event_entities(entity_id, event_id);
     CREATE INDEX IF NOT EXISTS idx_event_locations_country ON event_locations(country_code, event_id);
+    CREATE INDEX IF NOT EXISTS idx_event_regional_relevance_region ON event_regional_relevance(region_code, score DESC, event_id);
     CREATE INDEX IF NOT EXISTS idx_story_updates_story_version ON story_updates(story_id, story_version DESC);
     CREATE INDEX IF NOT EXISTS idx_story_updates_domain_sequence ON story_updates(primary_domain, sequence);
     CREATE INDEX IF NOT EXISTS idx_story_updates_type_sequence ON story_updates(change_type, sequence);
@@ -354,6 +381,7 @@ export function initializeAtlasSchema(db) {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(3, now);
   migrateSourcesV4(db);
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(4, now);
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(5, now);
 }
 
 function migrateSourcesV2(db) {

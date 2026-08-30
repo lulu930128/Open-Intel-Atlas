@@ -98,7 +98,7 @@ test("RSS 與 Atom media tags 只投影圖片 enclosure", () => {
   ]);
 });
 
-test("schema v4 可從 v3 形狀 additive migration，且 representative invariant 由資料庫保護", () => {
+test("schema v5 可從 v3 形狀 additive migration，且 representative invariant 由資料庫保護", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "atlas-media-schema-"));
   const dbPath = join(tempRoot, "atlas.sqlite");
   const legacy = new DatabaseSync(dbPath);

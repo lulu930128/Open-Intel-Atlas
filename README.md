@@ -10,12 +10,12 @@ Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓
 
 - Node.js 24+ 原生 HTTP server，無前端框架；MCP transport 使用官方 TypeScript SDK v2 與 Zod schema validation。
 - 新的 canonical pipeline 採用 `Source → Document → Story → Event`，保留來源、raw fetch、衍生方法與證據 lineage。
-- 23 個 source adapter 已註冊；17 個無額外憑證即可啟用，6 個會在缺少設定或未明確開啟時 fail closed。
+- 33 個 source adapter 已註冊；26 個預設可啟用，7 個會在缺少設定、transport gate 未通過或未明確開啟時 fail closed。
 - 每個來源各自保存 run status、最後成功／失敗、錯誤、筆數與 latency；單一來源失敗不會拖垮查詢 API。
-- SQLite schema v4 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化，並用 `document_media` 保存受來源政策約束的圖片候選；process 重啟後不會把排程或 change cursor truth 歸零。
+- SQLite schema v5 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化，並保存 Document-owned media、可稽核的 PromotionDecision 與獨立於事件地點的 RegionalRelevance；process 重啟後不會把排程、promotion/relevance audit 或 change cursor truth 歸零。
 - 可使用 ETag／Last-Modified 時送出 conditional GET；HTTP 304 視為來源成功但不建立重複 Document。
 - freshness 同時提供全域與 politics／technology／finance／hazards 分領域 coverage。
-- `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 consumer contract 為 `1.1`。
+- `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 source-level consumer contract 為 `1.2`。
 - `/mcp` 提供 loopback-only、read-only 的 Atlas tools/resources；REST 與 MCP 共用同一個 backend capability layer，不各自計算 freshness、coverage 或 verification。
 - 首頁是 newsroom-first 摘要版面，顯示本期頭條、live desk、6 則最新報導、四個領域入口、搜尋與資料缺口；完整領域事件流、來源健康與 evidence view 位於 `/domain.html?domain=politics|technology|finance|hazards`。Hero、Latest 前三則與 Domain 子頁 lead 只在 backend-selected `representative_media` 可 `remote_embed` 時顯示來源圖片，沒有合法圖片時使用自然收合的純文字版面。
 - `/atlas.html` 是獨立全屏情報地圖；它以 cursor pagination 讀取 canonical `/api/v1/events`，只有具備可驗證座標的事件會放置 marker，但無座標事件仍保留在列表。國家關聯只使用 backend `location.country_code`，不從標題猜測。
@@ -28,12 +28,12 @@ Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓
 
 目前 source registry：
 
-- 政治：GDELT DOC、BBC World RSS、U.S. Federal Register、Congress.gov。
-- 科技：arXiv、CISA KEV、CISA Advisories、NVD CVE、OSV.dev、Semantic Scholar。
+- 政治：GDELT DOC、BBC World RSS、U.S. Federal Register、Congress.gov、總統府、行政院、外交部、日本防衛省、NDL 國會會議錄 metadata；METI official Atom 已註冊但因 compliant Node transport 回 403 而預設停用。
+- 科技：arXiv、CISA KEV、CISA Advisories、NVD CVE、OSV.dev、Semantic Scholar、JPCERT/CC Alerts。
 - 金融：TWSE 重大訊息、SEC EDGAR、CoinGecko、Frankfurter、FRED、ECB、World Bank。
-- 氣象／災害：USGS、NASA EONET、GDACS、ReliefWeb、臺灣 CWA、U.S. NWS。
+- 氣象／災害：USGS、NASA EONET、GDACS、ReliefWeb、臺灣 CWA、民生示警公開資料平台 NCDR active CAP、U.S. NWS、日本氣象廳 JMAXML、日本消防庁 FDMA 災害應變 RSS。
 
-預設未啟用或缺少設定的來源會明確顯示 `disabled_reason`：Congress.gov、SEC EDGAR、FRED、ReliefWeb、CWA 與 Semantic Scholar。市場觀測值與研究論文會保存為 Document，但預設不會把每個價位或每篇論文升格成 Event。
+預設未啟用或缺少設定的來源會明確顯示 `disabled_reason`：Congress.gov、SEC EDGAR、FRED、ReliefWeb、CWA、Semantic Scholar 與 METI。METI 的 fixture／isolated contract 已完成，但正式 Atlas User-Agent 在 2026-08-30 取得 HTTP 403，因此不以瀏覽器偽裝繞過。市場觀測值、研究論文與 routine legislative/policy records 會保存為 Document，但不會自動把每個價位、論文或會議升格成 Event。
 
 NVD attribution notice:
 
@@ -114,6 +114,7 @@ GET  /api/v1/entities
 GET  /api/v1/entities/:id/events
 GET  /api/v1/search?q=...
 GET  /api/v1/brief?profile=brief_compact_v1
+GET  /api/v1/brief?presentation=east_asia
 GET  /api/v1/changes?cursor=...&domain=politics
 GET  /api/v1/collector
 POST /api/v1/collect?source=gdacs-events  (loopback only；scheduler 啟用時回傳 202 queued)
@@ -131,11 +132,13 @@ Consumer profiles 由 `/api/v1/profiles` 發布，目前包含：
 
 在 REST 可分別用 `/events?profile=latest_events_v1`、`/search?profile=search_results_v1`、`/stories/:id?profile=story_detail_v1`、`/sources?profile=source_status_v1` 與 `/domains?profile=domain_registry_v1` 取得和 MCP 相同的投影。
 
+Brief 的 `presentation` 支援 `global`、`east_asia`、`taiwan_focus`、`japan_focus`。這只影響 backend-owned selection，不改寫 Event verification、severity、confidence 或 location；區域合格內容不足時回傳較少 highlights 與 `coverage_gaps`，不以 global filler 補滿。來源所屬國與事件發生國是不同欄位，RegionalRelevance 不得拿來偽造 `event_country`。
+
 `/api/v1/changes` 的 cursor 是 opaque 且綁定當次 `domain`／`change_type`。續接時必須帶回相同 filters；若要只接收之後的新變化，可先用 `cursor=now` 取得 head cursor。Kuro 的 `last_cursor`、安靜時間與 delivery log 仍由 Kuro 保存，Atlas 不會因讀取 change feed 自動發通知。
 
-從 schema v1/v2 升級到 v3 時不會合成過去不存在的 update history；既有 Story 的目前狀態可由 brief/story API 取得，change feed 只會記錄 v3 上線後發生的 material changes。Schema v4 的 media migration 是 additive，不解析舊 raw JSON、不抓網路，也不把 presentation policy 變更冒充 Story update。
+從 schema v1/v2 升級到 v3 時不會合成過去不存在的 update history；既有 Story 的目前狀態可由 brief/story API 取得，change feed 只會記錄 v3 上線後發生的 material changes。Schema v4 的 media migration 與 schema v5 的 PromotionDecision／RegionalRelevance migration 都是 additive，不解析舊 raw JSON、不抓網路、不做無界 backfill，也不把 presentation policy 變更冒充 Story update。
 
-Representative media 是 Document-owned 的 optional additive projection，包含 `document_id`／`source_id` lineage。Outward query 會以 persisted media policy 與 current source media policy 共同計算 effective display policy，再跨 Story/Event supporting evidence deterministic 選圖；來源未同時通過 HTTPS、rights class、明確展示授權、terms evidence、review time 與 allowed-host policy 時，既有圖片也會立即 fail closed 為 `candidate`／`link_only`，不需等待下一次抓取。Newsroom 只有 `remote_embed` 才顯示圖片；REST 與 MCP consumer contract 仍為 `1.1`。
+Representative media 是 Document-owned 的 optional additive projection，包含 `document_id`／`source_id` lineage。Outward query 會以 persisted media policy 與 current source media policy 共同計算 effective display policy，再跨 Story/Event supporting evidence deterministic 選圖；來源未同時通過 HTTPS、rights class、明確展示授權、terms evidence、review time 與 allowed-host policy 時，既有圖片也會立即 fail closed 為 `candidate`／`link_only`，不需等待下一次抓取。Newsroom 只有 `remote_embed` 才顯示圖片；REST 與 MCP 共用 consumer contract `1.2`。
 
 BBC News World RSS 是目前第一個有條件通過的 live media source：只有 runtime 明確設定 `ATLAS_MEDIA_USAGE_CONTEXT=personal_noncommercial` 時，才會以官方 feed 原樣提供的 `ichef.bbci.co.uk` thumbnail、BBC News attribution 與原文連結產生 `remote_embed`。未設定、設定錯誤或未來商業／公開部署都會 fail closed 回到 `candidate`；商業使用需另取得 BBC 授權。
 

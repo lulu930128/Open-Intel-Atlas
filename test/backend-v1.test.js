@@ -95,8 +95,8 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
   assert.equal(health.version, "1.3.0");
-  assert.equal(health.contract_version, "1.1");
-  assert.equal(health.storage.schema_version, 4);
+  assert.equal(health.contract_version, "1.2");
+  assert.equal(health.storage.schema_version, 5);
   assert.equal(health.storage.events, 1);
   assert.equal(health.coverage.status, "full");
   assert.equal("db_file" in health.storage, false, "public health response must not expose local paths");
@@ -210,6 +210,8 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const brief = await briefResponse.json();
   assert.equal(briefResponse.status, 200);
   assert.equal(brief.profile, "brief_compact_v1");
+  assert.equal(brief.contract_version, "1.2");
+  assert.equal(brief.data.selection.presentation, "global");
   assert.ok(brief.data.generated_at, "brief data keeps the legacy v1 generated_at field");
   assert.equal(brief.data.highlights[0].id, storedEvent.id);
   assert.equal(brief.data.highlights[0].domain, "politics", "compact profile keeps the v1 brief domain alias");
@@ -237,20 +239,60 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
     "atlas.sources.status"
   ]);
   assert.ok(tools.result.tools.every((tool) => tool.annotations.readOnlyHint === true));
+  const latestTool = tools.result.tools.find((tool) => tool.name === "atlas.latest");
+  const briefTool = tools.result.tools.find((tool) => tool.name === "atlas.brief");
+  assert.ok(latestTool.inputSchema.properties.country, "atlas.latest must disclose the country filter");
+  assert.ok(briefTool.inputSchema.properties.country, "atlas.brief must disclose country independently from presentation");
 
   const mcpBriefResponse = await modernMcpRequest(
     baseUrl,
     "tools/call",
-    { name: "atlas.brief", arguments: { domain: "politics", limit: 5 } },
+    { name: "atlas.brief", arguments: { domain: "politics", presentation: "global", limit: 5 } },
     "atlas.brief"
   );
   assert.equal(mcpBriefResponse.status, 200);
   const mcpBrief = await readMcpJson(mcpBriefResponse);
   assert.equal(mcpBrief.result.structuredContent.profile, "brief_compact_v1");
+  assert.equal(mcpBrief.result.structuredContent.data.selection.presentation, "global");
   assert.equal(mcpBrief.result.structuredContent.data.highlights[0].id, storedEvent.id);
   assert.equal(mcpBrief.result.structuredContent.data.highlights[0].representative_media.url, "https://images.example.test/policy.jpg");
   assert.equal(mcpBrief.result.structuredContent.data.highlights[0].representative_media.document_id, mediaDocumentId);
   assert.equal(mcpBrief.result.structuredContent.coverage.status, "full");
+
+  const restBriefCountryResponse = await fetch(`${baseUrl}/api/v1/brief?country=JP&presentation=global&limit=5`);
+  const restBriefCountry = await restBriefCountryResponse.json();
+  const mcpBriefCountryResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.brief", arguments: { country: "jp", presentation: "global", limit: 5 } },
+    "atlas.brief"
+  );
+  const mcpBriefCountry = await readMcpJson(mcpBriefCountryResponse);
+  assert.deepEqual(
+    restBriefCountry.data.highlights.map((event) => event.id),
+    mcpBriefCountry.result.structuredContent.data.highlights.map((event) => event.id)
+  );
+  assert.deepEqual(restBriefCountry.data.highlights, []);
+  assert.notDeepEqual(
+    mcpBriefCountry.result.structuredContent.data.highlights.map((event) => event.id),
+    mcpBrief.result.structuredContent.data.highlights.map((event) => event.id),
+    "atlas.brief country must filter instead of being stripped by the MCP schema"
+  );
+
+  const restIntersectionResponse = await fetch(`${baseUrl}/api/v1/brief?country=US&presentation=japan_focus&limit=5`);
+  const restIntersection = await restIntersectionResponse.json();
+  const mcpIntersectionResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.brief", arguments: { country: "us", presentation: "japan_focus", limit: 5 } },
+    "atlas.brief"
+  );
+  const mcpIntersection = await readMcpJson(mcpIntersectionResponse);
+  assert.deepEqual(
+    restIntersection.data.highlights.map((event) => event.id),
+    mcpIntersection.result.structuredContent.data.highlights.map((event) => event.id)
+  );
+  assert.equal(restIntersection.data.selection.presentation, "japan_focus");
 
   const mcpLatestResponse = await modernMcpRequest(
     baseUrl,
@@ -262,6 +304,23 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const mcpLatest = await readMcpJson(mcpLatestResponse);
   assert.equal(mcpLatest.result.structuredContent.data[0].representative_media.document_id, mediaDocumentId);
   assert.equal(mcpLatest.result.structuredContent.data[0].representative_media.source_id, source.id);
+
+  const restCountryResponse = await fetch(`${baseUrl}/api/v1/events?profile=latest_events_v1&country=JP&limit=5`);
+  const restCountry = await restCountryResponse.json();
+  const mcpCountryResponse = await modernMcpRequest(
+    baseUrl,
+    "tools/call",
+    { name: "atlas.latest", arguments: { country: "jp", limit: 5 } },
+    "atlas.latest"
+  );
+  const mcpCountry = await readMcpJson(mcpCountryResponse);
+  assert.deepEqual(restCountry.data.map((event) => event.id), []);
+  assert.deepEqual(mcpCountry.result.structuredContent.data.map((event) => event.id), []);
+  assert.notDeepEqual(
+    mcpCountry.result.structuredContent.data.map((event) => event.id),
+    mcpLatest.result.structuredContent.data.map((event) => event.id),
+    "country must filter instead of being silently stripped by the MCP schema"
+  );
 
   const invalidMcpCursorResponse = await modernMcpRequest(
     baseUrl,
@@ -354,6 +413,7 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
 });
 
 function fixtureSource() {
+  const publishedBase = Date.now() - 5 * 60 * 1000;
   const source = {
     id: "fixture-source",
     name: "Fixture Source",
@@ -391,7 +451,7 @@ function fixtureSource() {
           title: "Government announces resilient infrastructure policy",
           summary: "A new infrastructure policy was announced.",
           url: "https://alpha.example.test/policy?utm_source=test",
-          publishedAt: "2026-08-23T00:00:00Z",
+          publishedAt: new Date(publishedBase).toISOString(),
           publisher: "Alpha News",
           publisherKey: "alpha.example.test",
           eventKey: "policy-2026",
@@ -403,7 +463,7 @@ function fixtureSource() {
           title: "Government announces resilient infrastructure policy",
           summary: "Independent reporting confirms the policy.",
           url: "https://beta.example.test/policy",
-          publishedAt: "2026-08-23T00:05:00Z",
+          publishedAt: new Date(publishedBase + 60_000).toISOString(),
           publisher: "Beta News",
           publisherKey: "beta.example.test",
           eventKey: "policy-2026",
@@ -414,7 +474,7 @@ function fixtureSource() {
           title: "Reference exchange rate observation",
           summary: "A point-in-time market value, not a news event.",
           url: "https://example.test/rate",
-          publishedAt: "2026-08-23T00:10:00Z",
+          publishedAt: new Date(publishedBase + 120_000).toISOString(),
           documentType: "market_observation",
           rawMetadata: { event_eligible: false }
         }, fetchedAt)

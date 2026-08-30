@@ -7,6 +7,7 @@ import {
   domainAvailability,
   selectDomain
 } from "./domainPageModel.js";
+import { verificationLabel } from "./verificationLabels.js";
 
 const STATUS_LABELS = Object.freeze({
   current: "目前最新",
@@ -20,17 +21,6 @@ const STATUS_LABELS = Object.freeze({
   unknown: "狀態未知",
   disabled: "未啟用",
   healthy: "正常"
-});
-
-const VERIFICATION_LABELS = Object.freeze({
-  official_confirmed: "官方來源確認",
-  multi_source_confirmed: "多來源交叉確認",
-  multi_source_supported: "多來源支持",
-  source_reported: "來源已報導",
-  single_source: "單一來源報導",
-  unverified: "尚待驗證",
-  disputed: "來源有爭議",
-  unknown: "驗證狀態未知"
 });
 
 const SEVERITY_LABELS = Object.freeze({ critical: "重大", high: "高", medium: "中", low: "低", unknown: "未分級" });
@@ -119,10 +109,6 @@ function truncate(value, limit = 220) {
 
 function statusLabel(value) {
   return STATUS_LABELS[value] || cleanText(value, "狀態未知");
-}
-
-function verificationLabel(value) {
-  return VERIFICATION_LABELS[value] || cleanText(value, "驗證狀態未知");
 }
 
 function severityLabel(value) {

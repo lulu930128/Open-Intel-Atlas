@@ -14,7 +14,7 @@ import { buildSourceRegistry } from "../src/atlasSourceRegistry.js";
 import { loadConfig } from "../src/config.js";
 import { createIntelDocument } from "../src/documents/normalize.js";
 
-test("schema v1 database upgrades to v4 without losing source runs", () => {
+test("schema v1 database upgrades to v5 without losing source runs", () => {
   withTempDatabase((dbPath) => {
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -47,7 +47,7 @@ test("schema v1 database upgrades to v4 without losing source runs", () => {
     legacy.close();
 
     const store = openAtlasStore(dbPath);
-    assert.equal(store.getStats().schema_version, 4);
+    assert.equal(store.getStats().schema_version, 5);
     assert.equal(store.getStats().source_runs, 1);
     assert.equal(store.db.prepare("SELECT status FROM source_runs WHERE id = ?").get("run:legacy").status, "success");
     const sourceColumns = store.db.prepare("PRAGMA table_info(sources)").all().map((column) => column.name);
