@@ -2,6 +2,23 @@
 
 本專案的重要變更會記錄在此。版本號採用 Semantic Versioning。
 
+## 文件補齊 — 2026-09-12
+
+- 重整公開 README 與文件入口，新增安裝、功能、維運、來源政策、API／MCP、開發與 GitHub 呈現指南。
+- 補上 Support、Security、Contributing 與 issue／PR 模板。
+- 文件依已提交 source 核對；不包含本機尚未提交的公司／總經擴充，也不重新宣稱 runtime、provider 或 consumer 驗收。
+
+## 1.3 系列已提交整合
+
+此節按 commit 補記先前未收錄的功能，不另宣告 release 日期。Application 版本為 1.3.0。
+
+- `65b9ca2`：durable Consumer Gateway、Story／Event change feed、REST representation 與 MCP。
+- `0b5a391`：evidence newsroom、Document media policy 與 canonical 架構收斂。
+- `b852f29`：TW／JP 區域來源、PromotionDecision、RegionalRelevance 與區域 brief。
+- `40e8348`：新增 Apache-2.0 LICENSE。
+
+以上是 source 變更紀錄；來源可用性與正式採用需另驗收。後續規劃見 [Roadmap](docs/product/Roadmap.md)。
+
 ## [1.1.0] - 2026-08-23
 
 ### 新增

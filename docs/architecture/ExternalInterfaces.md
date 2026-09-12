@@ -1,5 +1,7 @@
 # 對外介面與整合契約
 
+> 閱讀基準：目前公開 source 與本輪未重新驗證的範圍見[實作狀態](CurrentImplementationState.md)。本文的 dated checkpoint 與 target state 不代表目前 runtime。
+
 ## 1. 目標
 
 REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Transport 可以不同，但 taxonomy、evidence、freshness、coverage、verification 與排序規則不能各自重做。

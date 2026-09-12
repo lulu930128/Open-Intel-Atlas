@@ -1,5 +1,7 @@
 # Canonical Data Model
 
+> 閱讀基準：目前公開 source 與本輪未重新驗證的範圍見[實作狀態](CurrentImplementationState.md)。本文的 dated checkpoint 與 target state 不代表目前 runtime。
+
 ## 1. 目的
 
 資料模型必須把「來源抓到什麼」、「文章在說什麼」、「系統認為哪些內容屬於同一故事」與「有哪些可結構化的事件」分開。若直接把每篇來源轉成 Event，後續去重、修正、交叉佐證與 OMI/Kuro evidence lineage 都會失真。
