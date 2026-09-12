@@ -1,5 +1,7 @@
 # Canonical Data Model
 
+> 閱讀基準：目前公開 source 與本輪未重新驗證的範圍見[實作狀態](CurrentImplementationState.md)。本文的 dated checkpoint 與 target state 不代表目前 runtime。
+
 ## 2026-09-08 分類與公告收斂（working tree，schema v8）
 
 - `documents.classification_json` 保存 canonical classification 的 status、method/version、primary_domain、domain 理由及 source hints；`document_domains` 是同一決策的查詢投影。原始 metadata 與來源時間不因重分類覆寫。

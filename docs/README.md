@@ -1,34 +1,31 @@
-# Open Intel Atlas 文件索引
+# 文件導覽
 
-本目錄區分「長期產品方向」、「目標架構」與「單次實作任務」。三者的責任不同，不應互相取代。
+依你要完成的事選擇入口。一般使用者不需要先讀架構或歷史任務紀錄。
 
-## 長期產品方向
+## 使用 OLA
 
-- [產品願景](product/ProductVision.md)
-- [運作模型](product/OperatingModel.md)
-- [品質標準](product/QualityBar.md)
-- [產品路線圖](product/Roadmap.md)
+| 目的 | 文件 |
+| --- | --- |
+| 了解產品與核心流程 | [首頁](../README.md)、[功能導覽](guides/feature-tour.md) |
+| 安裝、設定來源與啟動 | [開始使用](guides/getting-started.md) |
+| 更新、備份、托盤與問題排查 | [維運指南](guides/operations.md) |
+| 理解缺資料、來源與圖片限制 | [來源與媒體政策](guides/sources-and-media.md) |
+| 回報錯誤與安全問題 | [Support](../SUPPORT.md)、[Security](../SECURITY.md) |
 
-`docs/product/` 只記錄長期適用、已由使用者提出或明確標為待確認的方向。單次實作細節不應直接升格為產品事實。
+## 開發與整合
 
-## 目標架構
+| 目的 | 文件 |
+| --- | --- |
+| 呼叫 REST、MCP 與變更 feed | [整合入門](guides/api-and-mcp.md)、[詳細契約](architecture/ExternalInterfaces.md) |
+| 修改程式與選擇驗證 | [開發指南](guides/development.md)、[Contributing](../CONTRIBUTING.md) |
+| 理解資料與責任邊界 | [架構導覽](architecture/index.md) |
+| 判斷哪些已實作 | [實作狀態與基準](architecture/CurrentImplementationState.md) |
+| 維護 GitHub 展示 | [Repository 呈現](guides/repository-presentation.md) |
 
-- [系統架構](architecture/SystemArchitecture.md)
-- [資料模型](architecture/DataModel.md)
-- [對外介面與整合契約](architecture/ExternalInterfaces.md)
+## 產品方向
 
-這些文件描述 target state。每一份文件都必須清楚區分目前已實作、正在進行與尚未實作的部分。
+[產品願景](product/ProductVision.md)定義定位；[運作模型](product/OperatingModel.md)說明 owner；[品質標準](product/QualityBar.md)定義驗收；[路線圖](product/Roadmap.md)描述未來方向。
 
-## 任務紀錄
+Registry、typed contract 與 source 是可執行事實。文件說明用途、限制與設計，不另維護完整來源或 capability 數量。歷史文件中的時間、port、測試與採用狀態只適用當時 checkpoint。
 
-- [Backend v1](agent-runs/backend-v1/Prompt.md)
-- [新聞平台長期架構設計](agent-runs/news-platform-architecture/Prompt.md)
-- [Scheduler 與 freshness v2](agent-runs/scheduler-freshness-v2/Prompt.md)
-- [Editorial newsroom v1](agent-runs/editorial-newsroom-v1/Prompt.md)
-- [Windows tray v1](agent-runs/windows-tray-v1/Prompt.md)
-- [Media Visual Newsroom v1](agent-runs/media-visual-newsroom-v1/Prompt.md)
-- [1.3.0 封版前架構收斂](agent-runs/release-1-3-0-architecture-convergence/Prompt.md)
-- [1.3.0 最終封版收尾](agent-runs/release-1-3-0-final-closeout/Prompt.md)
-- [Newsroom 領域導覽 v2](agent-runs/newsroom-domain-navigation-v2/Prompt.md)
-
-`docs/agent-runs/` 是可中斷續作的工作紀錄，不是永久架構規則。完成實作後，只有仍然成立的決策才回寫到產品或架構文件。
+`docs/agent-runs/` 保存既有任務紀錄，不是使用手冊或目前 runtime 的證明；新的長期結論應回寫指南或架構文件。
