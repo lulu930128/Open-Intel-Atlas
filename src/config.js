@@ -2,9 +2,11 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_NAME = "Open Intel Atlas";
-export const APP_VERSION = "1.3.0";
+export const APP_VERSION = "1.4.0";
 
 const MEDIA_USAGE_CONTEXTS = new Set(["unreviewed", "personal_noncommercial"]);
+const CONTENT_USAGE_CONTEXTS = new Set(["unreviewed", "personal_noncommercial"]);
+const COMPANY_NEWS_TARGET_MODES = new Set(["canary", "master_bounded"]);
 
 const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
 
@@ -16,6 +18,11 @@ export function loadConfig(env = process.env) {
     rootDir: ROOT_DIR,
     publicDir: join(ROOT_DIR, "public"),
     dataDir: join(ROOT_DIR, "data"),
+    // Only the executable entry point publishes; embedded/test runtimes opt in.
+    endpointStatePath: optional(env.ATLAS_ENDPOINT_STATE_PATH)
+      ? resolve(ROOT_DIR, env.ATLAS_ENDPOINT_STATE_PATH.trim())
+      : configuredDbPath && resolve(ROOT_DIR, configuredDbPath) !== join(ROOT_DIR, "data", "db", "atlas.sqlite")
+        ? null : join(ROOT_DIR, "data", "runtime", "atlas-endpoint.json"),
     dbPath: configuredDbPath
       ? isAbsolute(configuredDbPath)
         ? configuredDbPath
@@ -36,6 +43,15 @@ export function loadConfig(env = process.env) {
       userAgent: String(env.HTTP_USER_AGENT || "OpenIntelAtlas/1.0 local-research").trim()
     },
     mediaUsageContext: readMediaUsageContext(env.ATLAS_MEDIA_USAGE_CONTEXT),
+    contentUsageContext: readContentUsageContext(env.ATLAS_CONTENT_USAGE_CONTEXT),
+    companyNewsTargets: {
+      mode: readEnum(env.ATLAS_COMPANY_NEWS_TARGET_MODE, COMPANY_NEWS_TARGET_MODES, "canary"),
+      maxActive: readInteger(env.ATLAS_COMPANY_NEWS_MAX_ACTIVE_TARGETS, 50, { min: 5, max: 500 }),
+      dynamicCadenceMs: readInteger(env.ATLAS_COMPANY_NEWS_DYNAMIC_CADENCE_MS, 24 * 60 * 60 * 1000, {
+        min: 30 * 60 * 1000,
+        max: 7 * 24 * 60 * 60 * 1000
+      })
+    },
     collector: {
       schedulerEnabled,
       collectOnStart: schedulerEnabled && readBoolean(env.ATLAS_COLLECT_ON_START, true),
@@ -53,6 +69,7 @@ export function loadConfig(env = process.env) {
       jitterRatio: readNumber(env.SCHEDULER_JITTER_RATIO, 0.05, { min: 0, max: 0.25 })
     },
     providers: {
+      macroPdfToTextPath: optional(env.MACRO_PDFTOTEXT_PATH),
       nvdApiKey: optional(env.NVD_API_KEY),
       cwaApiKey: optional(env.CWA_API_KEY),
       congressApiKey: optional(env.CONGRESS_API_KEY),
@@ -72,6 +89,11 @@ export function loadConfig(env = process.env) {
 function readMediaUsageContext(value) {
   const context = String(value || "unreviewed").trim().toLowerCase();
   return MEDIA_USAGE_CONTEXTS.has(context) ? context : "unreviewed";
+}
+
+function readContentUsageContext(value) {
+  const context = String(value || "unreviewed").trim().toLowerCase();
+  return CONTENT_USAGE_CONTEXTS.has(context) ? context : "unreviewed";
 }
 
 function optional(value) {
@@ -97,4 +119,9 @@ function readNumber(value, fallback, bounds) {
   const parsed = Number(value);
   const number = Number.isFinite(parsed) ? parsed : fallback;
   return Math.max(bounds.min, Math.min(bounds.max, number));
+}
+
+function readEnum(value, allowed, fallback) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  return allowed.has(normalized) ? normalized : fallback;
 }

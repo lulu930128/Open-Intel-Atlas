@@ -160,6 +160,9 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 
 - 每個 source 有獨立 cadence、timeout、response limit、retry policy、required config 與 circuit/backoff state。
 - scheduler 使用 bounded concurrency；單一 source failure 不阻斷其他來源。
+- target-based provider 由一個 Source 擁有多個 `source_targets`；每個 target 有獨立 cadence、success/match、failure 與 exponential backoff，單一 ticker 失敗不能拖垮同批其他 targets。
+- Company News target registry 以完整 TWSE／TPEX master snapshot 的 active Security identifier 建立 candidates；預設只啟用五個 canary，只有明確切換 `master_bounded` 才依上限做每日 rotation。partial／truncated master 不得用來停用既有 target。
+- target result 先在 parent source run 內隔離，canonical persistence 成功後才提交 target success；persistence failure 必須把該 target run 降為 failed。
 - 支援 conditional GET、stable cursor 或 provider checkpoint 時才做 incremental fetch。
 - startup catch-up 依 provider 可回溯能力設定 window；powered-off 期間無法取得的內容標為 coverage gap。
 - public read API 預設只讀 DB；管理者可提交 bounded refresh job，但 response 不同步等待長時間 provider I/O。
@@ -189,7 +192,7 @@ Legacy API 在 deprecation window 內可保留 mapping，但 canonical store 不
 
 1. **Overview**：重大 stories、跨領域狀態、coverage/freshness、地圖與更新時間。
 2. **Story detail**：摘要、timeline、Event、evidence、來源獨立性、entity/location、correction/retraction。
-3. **Domains**：政治、科技、金融、災害與可擴充領域的趨勢與列表。
+3. **Domains**：政治、科技、金融、災害與可擴充領域的趨勢與列表；Finance 將 promoted Event stream 與 held Company Document lane 分開呈現。
 4. **Search**：全文／metadata 搜尋，支援 domain、topic、entity、location、time、verification、source filter。
 5. **Sources**：registry、rights note、last run、last success/failure、cadence、coverage gap。
 6. **System**：scheduler、pipeline lag、DB/schema、job failure、版本與 debug correlation ID。

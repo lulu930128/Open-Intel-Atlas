@@ -8,7 +8,7 @@ import {
   evaluateFormalRuntime
 } from "../scripts/lib/formal-regional-acceptance.mjs";
 
-test("formal runtime gate requires schema v5, contract 1.2, 33 sources and REST/MCP parity", () => {
+test("formal runtime gate requires schema v11, contract 1.2, 51 sources and REST/MCP parity", () => {
   const sources = ENABLED_REGIONAL_SOURCE_IDS.map((id) => ({ id, enabled: true }));
   sources.push({ id: "jp-meti-latest", enabled: false });
   const presentations = Object.fromEntries(REGIONAL_PRESENTATIONS.map((presentation) => [presentation, {
@@ -19,7 +19,7 @@ test("formal runtime gate requires schema v5, contract 1.2, 33 sources and REST/
     parity: true
   }]));
   const result = evaluateFormalRuntime({
-    health: { ok: true, version: "1.3.0", contract_version: "1.2", storage: { schema_version: 5, sources: 33 }, scheduler: { enabled: true } },
+    health: { ok: true, version: "1.4.0", contract_version: "1.2", storage: { schema_version: 11, sources: 51 }, scheduler: { enabled: true } },
     sources,
     presentations
   });
@@ -34,8 +34,8 @@ test("formal runtime gate rejects the current legacy runtime shape", () => {
   });
   assert.equal(result.passed, false);
   assert.ok(result.errors.some((error) => error.includes("contract 1.2")));
-  assert.ok(result.errors.some((error) => error.includes("schema 5")));
-  assert.ok(result.errors.some((error) => error.includes("33 registered")));
+  assert.ok(result.errors.some((error) => error.includes("schema 11")));
+  assert.ok(result.errors.some((error) => error.includes("51 registered")));
 });
 
 test("formal product gate requires live health and at least one qualified Event per regional profile", () => {

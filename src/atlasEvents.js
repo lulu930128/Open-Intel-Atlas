@@ -1,4 +1,5 @@
 import { clamp, stableId, summarize } from "./core/utils.js";
+import { primaryDomain as choosePrimaryDomain } from "./atlasClassification.js";
 import {
   deriveRegionalRelevance,
   promotionAllowsEventCreation,
@@ -13,7 +14,10 @@ const SEVERITY_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
 
 export function rebuildEventForStory(store, storyId, now = new Date().toISOString()) {
   const event = deriveEventForStory(store, storyId, now);
-  if (!event) return null;
+  if (!event) {
+    store.holdEventForStory(storyId, now);
+    return null;
+  }
   store.saveEvent(event);
   return event;
 }
@@ -43,7 +47,8 @@ export function deriveEventForStory(store, storyId, now = new Date().toISOString
 
   const representative = chooseRepresentative(cancelled ? cancellations : triggers);
   const domains = mergeDomains(triggers);
-  const primaryDomain = domains[0]?.domain || "politics";
+  const primaryDomain = choosePrimaryDomain(domains);
+  if (!primaryDomain) return null;
   const independentKeys = new Set(
     supportingDocuments
       .filter((document) => isIndependentEvidence(document))
@@ -60,7 +65,9 @@ export function deriveEventForStory(store, storyId, now = new Date().toISOString
   const confidence = confidenceScore(supportingDocuments, independentKeys.size, hasOfficial);
   const firstSeen = minTimestamp(triggers.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
   const lastUpdated = maxTimestamp(documents.map((document) => document.observed_at || document.published_at || document.fetched_at)) || now;
-  const entities = extractEntities(triggers);
+  const canonicalStoryEntities = store.getStoryEntities?.(storyId) || [];
+  const legacyEntities = extractLegacyNonCompanyEntities(triggers);
+  const entities = mergeEventEntities(canonicalStoryEntities, legacyEntities);
   const locations = location
     ? [
         {
@@ -268,7 +275,7 @@ function locationScore(location) {
   return point + official + Number(location.confidence || 0);
 }
 
-function extractEntities(documents) {
+function extractLegacyNonCompanyEntities(documents) {
   const entities = new Map();
   for (const document of documents) {
     const location = document.location;
@@ -286,22 +293,6 @@ function extractEntities(documents) {
       });
     }
 
-    const companyCode = document.raw_metadata?.company_code;
-    const companyName = document.raw_metadata?.company_name;
-    if (companyCode && companyName) {
-      const id = `company:twse:${String(companyCode).toLowerCase()}`;
-      entities.set(id, {
-        id,
-        entity_type: "company",
-        canonical_name: companyName,
-        country_code: "TW",
-        aliases: [companyName, companyCode],
-        role: "issuer",
-        confidence: 1,
-        metadata: { ticker: companyCode, exchange: "TWSE" }
-      });
-    }
-
     const text = `${document.title} ${document.summary || ""}`.toLowerCase();
     for (const known of KNOWN_ENTITIES) {
       if (known.aliases.some((alias) => text.includes(alias.toLowerCase()))) {
@@ -310,6 +301,12 @@ function extractEntities(documents) {
     }
   }
   return [...entities.values()];
+}
+
+function mergeEventEntities(canonical, legacy) {
+  const values = new Map();
+  for (const entity of [...legacy, ...canonical]) values.set(`${entity.id}|${entity.role || "actor"}`, entity);
+  return [...values.values()];
 }
 
 function lifecycleStatus(documents, lastUpdated, now) {
@@ -330,8 +327,6 @@ function maxTimestamp(values) {
 }
 
 const KNOWN_ENTITIES = [
-  { id: "company:nvidia", entity_type: "company", canonical_name: "NVIDIA", country_code: "US", aliases: ["nvidia", "nvda", "輝達"] },
-  { id: "company:tsmc", entity_type: "company", canonical_name: "TSMC", country_code: "TW", aliases: ["tsmc", "taiwan semiconductor", "台積電"] },
   { id: "organization:eu", entity_type: "organization", canonical_name: "European Union", country_code: null, aliases: ["european union", "eu commission"] },
   { id: "organization:nato", entity_type: "organization", canonical_name: "NATO", country_code: null, aliases: ["nato", "north atlantic treaty organization"] },
   { id: "organization:un", entity_type: "organization", canonical_name: "United Nations", country_code: null, aliases: ["united nations", "聯合國"] }

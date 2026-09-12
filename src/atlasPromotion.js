@@ -1,5 +1,5 @@
 export const PROMOTION_METHOD = "deterministic-document-promotion";
-export const PROMOTION_VERSION = "1.0.0";
+export const PROMOTION_VERSION = "1.1.0";
 export const REGIONAL_RELEVANCE_METHOD = "deterministic-structured-relevance";
 export const REGIONAL_RELEVANCE_VERSION = "1.0.0";
 
@@ -22,6 +22,15 @@ export function evaluateDocumentPromotion(document, evaluatedAt = new Date().toI
     status = "held";
     eligible = false;
     reasons.push("provider_explicit_ineligible");
+  } else if ((document.classification || metadata.classification)?.status === "unknown") {
+    status = "held";
+    eligible = false;
+    reasons.push("domain_classification_unknown");
+  } else if (isCompanyDisclosure(document)) {
+    const materiality = companyDisclosureMateriality(document);
+    status = materiality.eligible ? "promoted" : "held";
+    eligible = materiality.eligible;
+    reasons.push(materiality.reason);
   } else if (metadata.event_eligible === true) {
     status = "promoted";
     eligible = true;
@@ -54,6 +63,31 @@ export function evaluateDocumentPromotion(document, evaluatedAt = new Date().toI
       provider_evidence_support: metadata.evidence_support ?? null
     }
   };
+}
+
+export function isCompanyDisclosure(document) {
+  return document.document_type === "financial_release"
+    && (["twse-material-info", "tpex-material-info"].includes(document.source_id)
+      || document.raw_metadata?.disclosure_type === "company_material_information");
+}
+
+export function companyDisclosureMateriality(document) {
+  const title = String(document.title || "");
+  // Notice-only subjects must not borrow materiality from boilerplate in the body.
+  if (/法人說明會|法說會|說明會.*通知|股東.*會.*(召開|通知)|受邀參加|會議通知/.test(title)) {
+    return { eligible: false, reason: "routine_company_disclosure" };
+  }
+  const excerpt = `${document.summary || ""} ${document.body_excerpt || ""}`;
+  if (/工安|職災|事故/.test(title) && !/澄清|否認|演練/.test(title)
+      && /不治身亡|不幸身亡|(?:造成|導致)\s*[一二三四五六七八九十\d]+\s*(?:人|名員工)?\s*死亡/.test(excerpt)) {
+    return { eligible: true, reason: "official_fatal_incident" };
+  }
+  // Require an asserted action, not the bare word 'investment' or a statutory clause.
+  if (!/不實|澄清|否認|未有|無此|尚未|不予評論/.test(title)
+      && /(?:董事會通過|決議|宣布|公告|簽訂|發生|取得|處分|終止|聲請|申請|停工|停產).*(?:合併(?:案|契約|計畫)|併購|收購|重大投資|重大資本支出|重大訴訟|重大職災|重大工安|控制權|破產|重整|財務危機|重大營運)|(?:重大工安|重大職災|破產|停工|停產).*(?:事故|發生|影響|聲請|申請)/.test(title)) {
+    return { eligible: true, reason: "material_company_action" };
+  }
+  return { eligible: false, reason: "company_materiality_unconfirmed" };
 }
 
 export function promotionAllowsEventCreation(decision, document = {}) {

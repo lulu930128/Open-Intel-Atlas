@@ -1,11 +1,16 @@
 import { financeSources } from "./atlasAdaptersFinance.js";
+import { macroSources } from "./macro/sources/usBls.js";
+import { beaSources } from "./macro/sources/usBea.js";
+import { expandedMacroSources } from "./macro/sources/expandedSources.js";
 import { hazardSources } from "./atlasAdaptersHazards.js";
 import { politicsSources } from "./atlasAdaptersPolitics.js";
 import { technologySources } from "./atlasAdaptersTechnology.js";
 import { isDomain } from "./atlasDomains.js";
 import { normalizeSourceMediaPolicy } from "./documents/media.js";
+import { taiwanCompanySources } from "./sources/finance/taiwanCompanies.js";
+import { taiwanCompanyNewsSources } from "./sources/finance/taiwanCompanyNews.js";
 
-const DEFINITIONS = [...politicsSources, ...technologySources, ...financeSources, ...hazardSources];
+const DEFINITIONS = [...politicsSources, ...technologySources, ...financeSources, ...taiwanCompanySources, ...taiwanCompanyNewsSources, ...hazardSources, ...macroSources, ...beaSources, ...expandedMacroSources];
 const CATCHUP_MODES = new Set(["latest_only", "window", "provider_history"]);
 
 export function buildSourceRegistry(config) {
@@ -27,15 +32,20 @@ export function buildSourceRegistry(config) {
     const override = config.sourceFlags[flagName];
     const requestedEnabled = override === undefined ? definition.defaultEnabled !== false : override;
     const missingConfig = (definition.requiredConfig || []).filter((key) => !config.providers[key]);
-    const enabled = requestedEnabled && missingConfig.length === 0;
+    const allowedUsageContexts = Array.isArray(definition.allowedContentUsageContexts) ? definition.allowedContentUsageContexts : [];
+    const usageContextBlocked = allowedUsageContexts.length > 0 && !allowedUsageContexts.includes(config.contentUsageContext);
+    const enabled = requestedEnabled && missingConfig.length === 0 && !usageContextBlocked;
     const disabledReason = enabled
       ? null
       : missingConfig.length > 0
         ? `Missing configuration: ${missingConfig.join(", ")}`
+        : usageContextBlocked
+          ? `Content usage context ${config.contentUsageContext || "unreviewed"} is not allowed; expected one of: ${allowedUsageContexts.join(", ")}`
         : `Disabled by ${flagName}`;
 
     return {
       ...definition,
+      coverage: normalizeCoverage(definition),
       mediaPolicy: normalizeSourceMediaPolicy(
         typeof definition.mediaPolicy === "function"
           ? definition.mediaPolicy(config)
@@ -79,7 +89,23 @@ export function publicSourceDefinition(source) {
     timeout_ms: source.timeoutMs,
     enabled: source.enabled,
     disabled_reason: source.disabledReason,
-    media_policy: source.mediaPolicy
+    media_policy: source.mediaPolicy,
+    coverage: source.coverage || normalizeCoverage(source)
+  };
+}
+
+function normalizeCoverage(source) {
+  const coverage = source.coverage || {};
+  return {
+    capabilities: Array.isArray(coverage.capabilities) && coverage.capabilities.length > 0
+      ? [...new Set(coverage.capabilities.map(String))]
+      : [`documents.${source.documentType || source.document_type || "unknown"}`],
+    markets: Array.isArray(coverage.markets) ? [...new Set(coverage.markets.map(String))] : [],
+    guarantee: ["complete_snapshot", "bounded_window", "best_effort"].includes(coverage.guarantee)
+      ? coverage.guarantee
+      : "best_effort",
+    recoverability: coverage.recoverability || source.catchupMode || source.catchup_mode || "latest_only",
+    notes: coverage.notes || null
   };
 }
 

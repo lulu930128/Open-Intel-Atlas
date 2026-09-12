@@ -1,5 +1,7 @@
+import { buildEventsPath } from "./newsroomQueryModel.js";
 export const DOMAIN_PAGE_LIMIT = 18;
 export const DOMAIN_PAGE_MAX_EVENTS = 100;
+export const COMPANY_NEWS_LIMIT = 20;
 
 export function selectDomain(search, registry) {
   const params = search instanceof URLSearchParams
@@ -14,9 +16,19 @@ export function buildDomainEventsPath(domainId, options = {}) {
   const domain = cleanText(domainId);
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(domain)) throw new Error("A canonical domain id is required");
   const limit = clampInteger(options.limit, 1, 200, DOMAIN_PAGE_LIMIT);
-  const params = new URLSearchParams({ domain, limit: String(limit) });
+  return buildEventsPath({ domain, limit, cursor: options.cursor, presentation: options.presentation });
+}
+
+export function buildCompanyNewsPath(options = {}) {
+  const limit = clampInteger(options.limit, 1, 50, COMPANY_NEWS_LIMIT);
+  const markets = [...new Set((options.markets || ["TWSE", "TPEX"])
+    .map((market) => cleanText(market).toUpperCase())
+    .filter((market) => ["TWSE", "TPEX"].includes(market)))].sort();
+  if (markets.length === 0) throw new Error("At least one supported company news market is required");
+  const params = new URLSearchParams({ limit: String(limit) });
+  for (const market of markets) params.append("market", market);
   if (options.cursor) params.set("cursor", String(options.cursor));
-  return `/api/v1/events?${params.toString()}`;
+  return `/api/v1/company-news?${params.toString()}`;
 }
 
 export function appendUniqueEvents(current, incoming, maxEvents = DOMAIN_PAGE_MAX_EVENTS) {

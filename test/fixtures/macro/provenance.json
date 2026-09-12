@@ -1,0 +1,10 @@
+{
+  "source": "U.S. Bureau of Labor Statistics",
+  "retrieved_at": "2026-09-12T03:27:00.539Z",
+  "scope": "Selected official table rows and publication header, omitted navigation and unrelated rows",
+  "urls": [
+    "https://www.bls.gov/news.release/cpi.t01.htm",
+    "https://www.bls.gov/news.release/ppi.t01.htm",
+    "https://www.bls.gov/news.release/ppi.t03.htm"
+  ]
+}

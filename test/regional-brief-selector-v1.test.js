@@ -55,6 +55,7 @@ test("regional brief 將 country 與 quality candidate policy 一起交給 Store
   const japanEvent = fixtureEvent("jp-ranked-250", "technology", "JP", 1, "2026-08-30T11:00:00Z");
   const calls = [];
   const store = {
+    macroCatalog: { indicators: [], groups: {} },
     listEvents(filters) {
       calls.push({ method: "global", filters });
       return { items: Array.from({ length: 200 }, (_, index) => fixtureEvent(`global-${index}`, "technology", null, 0, NOW)) };
@@ -70,7 +71,8 @@ test("regional brief 將 country 與 quality candidate policy 一起交給 Store
       return NOW;
     }
   };
-  const result = createAtlasCapabilities({ store }).brief({ country: "US", presentation: "japan_focus", limit: 8 });
+  const result = createAtlasCapabilities({ store, clock: () => new Date(NOW) })
+    .brief({ country: "US", presentation: "japan_focus", limit: 8 });
 
   assert.deepEqual(result.data.highlights.map((event) => event.id), [japanEvent.id]);
   assert.equal(calls.length, 1);

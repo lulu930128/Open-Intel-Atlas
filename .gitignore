@@ -4,5 +4,6 @@ node_modules/
 !.env.example
 data/cache/
 data/db/
+data/runtime/
 logs/
 *.log

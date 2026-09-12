@@ -89,6 +89,27 @@ function buildAtlasMcpServer(capabilities) {
     }
   );
 
+  const macroFilters = {
+    group: z.string().min(1).max(40).optional(), country: z.literal("US").optional(),
+    limit: z.number().int().min(1).max(100).optional(), cursor: z.string().max(2048).optional()
+  };
+  registerTool(server, "atlas.macro.calendar", {
+    title: "Official macro release calendar", description: "Read official US macro release times, acquisition completeness and observations across BLS, BEA, DOL and Federal Reserve sources. No fetch on reads.",
+    inputSchema: z.object({ ...macroFilters, from: z.string().optional(), to: z.string().optional() })
+  }, capabilities.macroCalendar);
+  registerTool(server, "atlas.macro.release", {
+    title: "Macro release evidence", description: "Read one release and calendar change history. Scheduled times do not prove acquisition.",
+    inputSchema: z.object({ release_id: z.string().min(1) })
+  }, capabilities.macroRelease);
+  registerTool(server, "atlas.macro.indicator", {
+    title: "Macro indicator definitions", description: "Read exact CPI/PPI units, seasonal adjustment and indicator identities.",
+    inputSchema: z.object({ group: macroFilters.group, country: macroFilters.country, indicator_id: z.string().optional() })
+  }, capabilities.macroIndicators);
+  registerTool(server, "atlas.macro.observations", {
+    title: "Macro observed revision history", description: "Read latest observations or immutable observed vintages; as_of means Atlas knowledge time, not a reconstructed initial release.",
+    inputSchema: z.object({ ...macroFilters, indicator_id: z.string().optional(), reference_period: z.string().optional(), history: z.boolean().optional(), as_of: z.string().optional() })
+  }, capabilities.macroObservations);
+
   registerTool(server, "atlas.latest", {
     title: "Latest canonical events",
     description: "Return bounded, compact, canonical events with backend-owned freshness and coverage metadata.",
@@ -139,6 +160,73 @@ function buildAtlasMcpServer(capabilities) {
     description: "Read source policy, health, freshness, and catch-up state for all or one domain.",
     inputSchema: z.object({ domain: DOMAIN_SCHEMA.optional() })
   }, capabilities.sourceStatus);
+
+  const companyLocatorSchema = {
+    entity_id: z.string().trim().min(1).optional(),
+    exchange: z.string().trim().min(2).max(12).optional(),
+    symbol: z.string().trim().min(1).max(32).optional()
+  };
+
+  registerTool(server, "atlas.company.list", {
+    title: "List canonical companies",
+    description: "Return a deterministic cursor-paginated canonical company directory.",
+    inputSchema: z.object({
+      market: z.enum(["TWSE", "TPEX"]).optional(),
+      q: z.string().trim().min(1).max(200).optional(),
+      cursor: z.string().trim().min(1).max(2000).optional(),
+      limit: boundedLimit(50)
+    })
+  }, capabilities.companyList);
+
+  registerTool(server, "atlas.company.disclosures", {
+    title: "Read official company disclosures",
+    description: "Read bounded official disclosure Documents with canonical company links and source coverage, including held routine notices.",
+    inputSchema: z.object({ market: z.enum(["TWSE", "TPEX"]).optional(), exchange: z.enum(["TWSE", "TPEX"]).optional(), symbol: z.string().min(4).max(12).optional(), cursor: z.string().max(2000).optional(), limit: boundedLimit(20) })
+  }, capabilities.companyDisclosures);
+
+  registerTool(server, "atlas.company.get", {
+    title: "Get canonical company",
+    description: "Resolve and return a canonical company profile with official identifiers and lineage.",
+    inputSchema: z.object(companyLocatorSchema)
+  }, capabilities.companyProfile);
+
+  registerTool(server, "atlas.company.events", {
+    title: "Get company events",
+    description: "Return events linked through canonical company evidence.",
+    inputSchema: z.object({ ...companyLocatorSchema, cursor: z.string().trim().min(1).max(2000).optional(), limit: boundedLimit(20) })
+  }, capabilities.companyEvents);
+
+  registerTool(server, "atlas.company.evidence", {
+    title: "Get company evidence",
+    description: "Return resolved company Stories and normalized evidence documents.",
+    inputSchema: z.object({
+      ...companyLocatorSchema,
+      story_cursor: z.string().trim().min(1).max(2000).optional(),
+      document_cursor: z.string().trim().min(1).max(2000).optional(),
+      limit: boundedLimit(20)
+    })
+  }, capabilities.companyEvidence);
+
+  registerTool(server, "atlas.company.relations", {
+    title: "Get company relations",
+    description: "Return canonical issuer, security, and company relationships.",
+    inputSchema: z.object({ ...companyLocatorSchema, cursor: z.string().trim().min(1).max(2000).optional(), limit: boundedLimit(20) })
+  }, capabilities.companyRelations);
+
+  registerTool(server, "atlas.company.news", {
+    title: "Get exact stock news",
+    description: "Read stock-linked news Documents, preserved attribution and rights, and stock-specific target coverage. Empty results do not prove no news exists.",
+    inputSchema: z.object({
+      exchange: z.enum(["TWSE", "TPEX"]), symbol: z.string().trim().regex(/^[A-Za-z0-9]{4,12}$/),
+      cursor: z.string().trim().min(1).max(2000).nullish(), limit: z.number().int().min(1).max(50).default(20)
+    })
+  }, capabilities.companyNewsStock);
+
+  registerTool(server, "atlas.company.snapshot", {
+    title: "Get company intelligence snapshot",
+    description: "Return a bounded company snapshot with completeness, events, Stories, and evidence.",
+    inputSchema: z.object({ ...companyLocatorSchema, limit: boundedLimit(12) })
+  }, capabilities.companySnapshot);
 
   registerJsonResource(server, "atlas-domains", "atlas://domains", "Atlas domain registry", capabilities.domains);
   registerJsonResource(server, "atlas-source-status", "atlas://sources/status", "Atlas source status", capabilities.sourceStatus);

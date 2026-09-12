@@ -323,14 +323,7 @@ async function fetchFederalRegister({ source, http, catchup, now }) {
   const fetchedAt = now();
   const documents = (Array.isArray(fetch.data?.results) ? fetch.data.results : []).map((item) => {
     const agencies = Array.isArray(item.agencies) ? item.agencies.map((agency) => agency.name).filter(Boolean) : [];
-    const titleText = `${item.title || ""} ${item.abstract || ""}`.toLowerCase();
     const domains = [{ domain: "politics", confidence: 0.9 }];
-    if (/technolog|cyber|semiconductor|artificial intelligence|telecom/.test(titleText)) {
-      domains.push({ domain: "technology", confidence: 0.7 });
-    }
-    if (/bank|securit|financial|monetary|trade|tariff|treasury/.test(titleText)) {
-      domains.push({ domain: "finance", confidence: 0.65 });
-    }
 
     return createIntelDocument(
       source,
@@ -579,7 +572,7 @@ async function fetchJapanMetiLatest({ source, http, now }) {
           publisher: "Ministry of Economy, Trade and Industry, Japan",
           publisherKey: "jp-meti",
           language: "en",
-          domains: classifyMetiDomains(`${item.title || ""} ${item.description || ""}`),
+          domains: [{ domain: "politics", confidence: 0.8 }],
           tags: ["japan", "meti", "official-release", ...item.categories],
           rawMetadata: {
             event_eligible: false,
@@ -742,18 +735,6 @@ function isoDate(value) {
 function finiteInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 ? number : null;
-}
-
-function classifyMetiDomains(value) {
-  const text = String(value || "").toLowerCase();
-  const domains = [{ domain: "politics", confidence: 0.8 }];
-  if (/\b(ai|artificial intelligence|semiconductor|cyber|digital|patent|intellectual property|robot|quantum|software|telecom)/i.test(text)) {
-    domains.push({ domain: "technology", confidence: 0.9 });
-  }
-  if (/\b(trade|tariff|anti-dumping|investment|corporate|economy|economic|finance|financial|energy|supply chain|export control)/i.test(text)) {
-    domains.push({ domain: "finance", confidence: 0.85 });
-  }
-  return domains;
 }
 
 function padTime(value) {

@@ -8,7 +8,7 @@ import {
   titleTokens,
   toIsoTimestamp
 } from "../core/utils.js";
-import { isDomain } from "../atlasDomains.js";
+import { normalizeDomainHints, withDocumentClassification } from "../atlasClassification.js";
 import { normalizeDocumentMedia } from "./media.js";
 
 const VALID_DOCUMENT_TYPES = new Set([
@@ -55,7 +55,7 @@ export function createIntelDocument(source, input, now = new Date().toISOString(
   });
   const media = normalizeDocumentMedia(source, input.media, id, fetchedAt);
 
-  return {
+  return withDocumentClassification({
     id,
     source_id: source.id,
     external_id: externalId,
@@ -79,7 +79,7 @@ export function createIntelDocument(source, input, now = new Date().toISOString(
     media,
     raw_metadata: metadata,
     raw_metadata_json: boundedJson(metadata)
-  };
+  });
 }
 
 export function dedupeDocuments(documents) {
@@ -102,19 +102,7 @@ export function dedupeDocuments(documents) {
 }
 
 export function normalizeDomains(domains, fallback = []) {
-  const values = Array.isArray(domains) && domains.length > 0 ? domains : fallback;
-  const normalized = [];
-
-  for (const value of values || []) {
-    const domain = typeof value === "string" ? value : value?.domain;
-    if (!isDomain(domain) || normalized.some((entry) => entry.domain === domain)) {
-      continue;
-    }
-    const confidence = typeof value === "string" ? 0.7 : Number(value.confidence);
-    normalized.push({ domain, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.7 });
-  }
-
-  return normalized.length > 0 ? normalized : [{ domain: "politics", confidence: 0.3 }];
+  return normalizeDomainHints(Array.isArray(domains) && domains.length ? domains : fallback);
 }
 
 function sanitizeLocation(location) {

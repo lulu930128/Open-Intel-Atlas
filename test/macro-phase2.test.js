@@ -1,0 +1,46 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {readFileSync} from "node:fs";
+import {parseBeaRelease,discoverBeaRelease} from "../src/macro/sources/beaParser.js";
+import {createAtlasRuntime} from "../src/atlasServer.js";
+import {loadConfig} from "../src/config.js";
+import {buildSourceRegistry} from "../src/atlasSourceRegistry.js";
+import {valueLabel,sourceLink,escapeHtml} from "../public/macroModel.js";
+const html=readFileSync(new URL("./fixtures/macro/bea-release.html",import.meta.url),"utf8");
+const url="https://www.bea.gov/news/2026/personal-income-and-outlays-july-2026";
+test("BEA official fixture preserves definitions, periods, missing and negative values",()=>{
+  const batch=parseBeaRelease(html,url);assert.equal(batch.observations.length,10);
+  assert.equal(batch.observations.find(o=>o.indicator_id==="US_PCE_HEADLINE_YOY").actual,3.7);
+  assert.equal(batch.calendars[1].scheduled_at,"2026-09-30T12:30:00.000Z");
+  assert.throws(()=>parseBeaRelease(html.replace("[Percent change from preceding month]","Annual rate"),url),/units/);
+  assert.throws(()=>parseBeaRelease(html,url.replace("july","june")),/mismatch/);
+  assert.throws(()=>discoverBeaRelease('<a href="https://evil.example/news/2026/personal-income-and-outlays-july-2026">x</a>'),/missing/);
+  const negative=parseBeaRelease(html.replace("increased 3.7 percent","decreased 3.7 percent"),url);
+  assert.equal(negative.observations.find(o=>o.indicator_id==="US_PCE_HEADLINE_YOY").actual,-3.7);
+  const missing=parseBeaRelease(html.replaceAll('>0.4<','>—<'),url);assert.ok(missing.warnings.length>0);
+});
+test("BEA collector preserves lineage and failure facts; REST/MCP reads match without writes",async t=>{
+  const config=loadConfig({ATLAS_AUTO_COLLECT:"false",ATLAS_COLLECT_ON_START:"false",ATLAS_DB_PATH:":memory:",HOST:"127.0.0.1",SOURCE_BEA_PCE_CALENDAR_ENABLED:"true",SOURCE_BEA_PCE_RELEASE_ENABLED:"true"});config.port=0;
+  config.dbPath=":memory:";
+  const all=buildSourceRegistry(config).all.filter(s=>s.id.startsWith("bea-pce-"));let failure=false,calls=0;
+  const http={async getText(target){calls++;if(failure)throw Error("timeout");const data=target===url?html:`<a href="${url}">Current</a>`;return{url:target,status:200,contentType:"text/html",data,rawPayload:data};}};
+  let clock=Date.parse("2026-09-12T04:00:00.000Z");
+  const runtime=createAtlasRuntime({config,registry:{all,enabled:all,get:id=>all.find(s=>s.id===id)},http,clock:()=>new Date(clock),endpointStatePath:null});t.after(()=>runtime.close());
+  for(const source of all)assert.equal((await runtime.collector.runSource(source.id)).status,"success");
+  assert.equal(runtime.store.macro.maxSequence(),10);
+  await runtime.collector.runSource("bea-pce-release");assert.equal(runtime.store.macro.maxSequence(),10);
+  const address=await runtime.listen(),base=`http://127.0.0.1:${address.port}`;
+  const fetches=calls,changes=runtime.store.db.prepare("SELECT total_changes() n").get().n;
+  const rest=await(await fetch(base+"/api/v1/macro/observations?group=pce")).json();assert.equal(rest.freshness.status,"current");assert.equal(rest.data.length,10);
+  const response=await fetch(base+"/mcp",{method:"POST",headers:{Accept:"application/json, text/event-stream","Content-Type":"application/json","MCP-Protocol-Version":"2026-07-28","Mcp-Method":"tools/call","Mcp-Name":"atlas.macro.observations"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"atlas.macro.observations",arguments:{group:"pce"},_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{name:"test",version:"1"}}}})});
+  const mcp=(await response.json()).result.structuredContent;assert.deepEqual(mcp.data,rest.data);assert.deepEqual(mcp.coverage,rest.coverage);
+  assert.equal(calls,fetches);assert.equal(runtime.store.db.prepare("SELECT total_changes() n").get().n,changes);
+  assert.deepEqual(runtime.store.db.prepare("PRAGMA foreign_key_check").all(),[]);
+  const linked=runtime.store.db.prepare("SELECT r.request_url FROM documents d JOIN raw_fetches r ON r.id=d.raw_fetch_id WHERE d.id=?").get(rest.data[0].evidence_document_id);assert.equal(linked.request_url,url);
+  clock+=60000;failure=true;assert.equal((await runtime.collector.runSource("bea-pce-release")).status,"failed");assert.equal(runtime.store.macro.maxSequence(),10);
+  const stale=await(await fetch(base+"/api/v1/macro/observations?group=pce")).json();assert.equal(stale.freshness.status,"stale");
+});
+test("Macro presentation retains zero and missing, escapes text and rejects unsafe links",()=>{
+  assert.equal(valueLabel(0,"percent"),"0%");assert.equal(valueLabel(null,"percent"),"未取得");assert.equal(valueLabel(NaN,"percent"),"未取得");assert.equal(sourceLink("javascript:alert(1)"),"未提供");assert.equal(escapeHtml("<script>"),"&lt;script&gt;");
+  const index=readFileSync(new URL("../public/index.html",import.meta.url),"utf8");assert.match(index,/data-open-status>資料說明<\/button><a href="\/macro.html">總體數據/);
+});

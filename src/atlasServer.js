@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { sourceFingerprint } from "./atlasSourceFingerprint.js";
+import { createEndpointPublisher } from "./atlasEndpoint.js";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,24 +12,45 @@ import { createHttpClient } from "./atlasHttp.js";
 import { createAtlasMcpEndpoint } from "./atlasMcp.js";
 import { buildSourceRegistry } from "./atlasSourceRegistry.js";
 import { openAtlasStore } from "./atlasStore.js";
+import { createCompanyNewsTargetRegistry } from "./entities/companyNewsTargetRegistry.js";
 import { APP_NAME, APP_VERSION, loadConfig } from "./config.js";
 import { buildDashboardSnapshot } from "./dashboard.js";
 
+const STARTUP_SOURCE_FINGERPRINT = sourceFingerprint(loadConfig().rootDir);
+
 export function createAtlasRuntime(options = {}) {
+  const clock = options.clock || (() => new Date());
   const config = options.config || loadConfig();
+  const endpoint = createEndpointPublisher({ rootDir: config.rootDir, statePath: options.endpointStatePath, version: APP_VERSION, sourceFingerprint: STARTUP_SOURCE_FINGERPRINT });
   const registry = options.registry || buildSourceRegistry(config);
   const store = options.store || openAtlasStore(config.dbPath);
-  store.registerSources(registry.all);
+  store.registerSources(registry.all, clock().toISOString());
+  store.registerSourceTargets(registry.all, clock().toISOString());
+  const targetRegistry = options.targetRegistry || createCompanyNewsTargetRegistry({ store, registry, config, clock });
+  targetRegistry.reconcile();
   const http = options.http || createHttpClient(config.http);
-  const collector = options.collector || createCollector({ store, registry, http, config });
-  const scheduler = options.scheduler || startCollectorScheduler({ collector, registry, store, config });
-  const context = { config, registry, store, http, collector, scheduler };
+  const collector = options.collector || createCollector({
+    store,
+    registry,
+    http,
+    config,
+    clock,
+    afterPersist: ({ sourceResult }) => Array.isArray(sourceResult.master_items) ? targetRegistry.reconcile() : null
+  });
+  const scheduler = options.scheduler || startCollectorScheduler({ collector, registry, store, config, clock });
+  const context = { config, registry, store, targetRegistry, http, collector, scheduler, clock };
   context.capabilities = options.capabilities || createAtlasCapabilities(context);
   context.mcp = options.mcp || createAtlasMcpEndpoint(context);
 
   const server = createServer(async (request, response) => {
     try {
       const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/runtime") {
+        if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress)) {
+          return sendJson(response, { error: "loopback_only" }, 403);
+        }
+        return sendJson(response, endpoint.snapshot());
+      }
       if (requestUrl.pathname === "/mcp") {
         await context.mcp.handle(request, response);
         return;
@@ -53,11 +76,18 @@ export function createAtlasRuntime(options = {}) {
           resolveListen();
         });
       });
+      try {
+        await endpoint.publish(server.address());
+      } catch (error) {
+        await this.close();
+        throw error;
+      }
       return server.address();
     },
     async close() {
       if (closed) return;
       closed = true;
+      endpoint.stop();
       await scheduler.stop();
       if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
       await context.mcp.close();
@@ -76,7 +106,7 @@ async function handleLegacyApi(request, response, requestUrl, context) {
   if (requestUrl.pathname === "/api/health") {
     const stats = context.store.getStats();
     const { db_file: _dbFile, ...storage } = stats;
-    sendJson(response, { ok: true, name: APP_NAME, version: APP_VERSION, now: new Date().toISOString(), storage });
+    sendJson(response, { ok: true, name: APP_NAME, version: APP_VERSION, now: context.clock().toISOString(), storage });
     return true;
   }
 
@@ -291,7 +321,8 @@ function contentType(filePath) {
 }
 
 async function main() {
-  const runtime = createAtlasRuntime();
+  const config = loadConfig();
+  const runtime = createAtlasRuntime({ config, endpointStatePath: config.endpointStatePath });
   const shutdown = async (signal) => {
     console.log(`[atlas] received ${signal}; shutting down`);
     await runtime.close();

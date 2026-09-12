@@ -94,9 +94,9 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const healthResponse = await fetch(`${baseUrl}/api/v1/health`);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
-  assert.equal(health.version, "1.3.0");
+  assert.equal(health.version, "1.4.0");
   assert.equal(health.contract_version, "1.2");
-  assert.equal(health.storage.schema_version, 5);
+  assert.equal(health.storage.schema_version, 11);
   assert.equal(health.storage.events, 1);
   assert.equal(health.coverage.status, "full");
   assert.equal("db_file" in health.storage, false, "public health response must not expose local paths");
@@ -231,12 +231,24 @@ test("collector、canonical store、v1 API 與舊前端相容層可端到端運�
   const tools = await readMcpJson(toolsResponse);
   const toolNames = tools.result.tools.map((tool) => tool.name);
   assert.deepEqual(toolNames, [
+    "atlas.macro.calendar",
+    "atlas.macro.release",
+    "atlas.macro.indicator",
+    "atlas.macro.observations",
     "atlas.latest",
     "atlas.search",
     "atlas.story.get",
     "atlas.brief",
     "atlas.changes",
-    "atlas.sources.status"
+    "atlas.sources.status",
+    "atlas.company.list",
+    "atlas.company.disclosures",
+    "atlas.company.get",
+    "atlas.company.events",
+    "atlas.company.evidence",
+    "atlas.company.relations",
+    "atlas.company.news",
+    "atlas.company.snapshot"
   ]);
   assert.ok(tools.result.tools.every((tool) => tool.annotations.readOnlyHint === true));
   const latestTool = tools.result.tools.find((tool) => tool.name === "atlas.latest");

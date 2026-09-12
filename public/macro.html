@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>總體數據｜Open Intel Atlas</title>
+  <link rel="stylesheet" href="/newsroom.css"><link rel="stylesheet" href="/macro.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要內容</a>
+  <header class="macro-header page-shell"><a href="/" class="macro-brand">OPEN INTEL <strong>ATLAS</strong></a><span>官方經濟數據 · 美國</span></header>
+  <nav class="desk-nav" aria-label="主要導覽"><div class="page-shell desk-nav__inner">
+    <a href="/">最新</a><a href="/domain.html?domain=politics">政治</a><a href="/domain.html?domain=technology">科技發展</a><a href="/domain.html?domain=finance">金融</a><a href="/domain.html?domain=hazards">氣象與災害</a><a href="/stocks.html">股票</a><a href="#method">資料說明</a><a href="/macro.html" aria-current="page">總體數據</a>
+  </div></nav>
+  <main id="main-content" class="page-shell macro-main">
+    <div class="macro-title"><div><h1>總體數據</h1><p>核對正式發布、數值口徑與歷次觀測。</p></div><button id="reload" type="button">重新讀取</button></div>
+    <form id="group-form" class="macro-controls"><label for="group">數據系列</label><select id="group" name="group"><option value="cpi">CPI 消費者物價</option><option value="ppi">PPI 生產者物價</option><option value="pce">PCE・個人所得與消費</option><option value="employment">Labor 就業與薪資</option><option value="gdp">GDP 國內生產毛額</option><option value="claims">Claims 失業保險申請</option><option value="fomc">FOMC 利率決議</option></select></form>
+    <p id="page-status" role="status" aria-live="polite">正在讀取數據…</p>
+    <section id="current" aria-labelledby="current-title" aria-busy="true"><h2 id="current-title">最近一期</h2><div id="release-summary"></div><div id="policy-decision"></div><div id="artifacts"></div><div class="macro-table-scroll" tabindex="0" aria-label="本期數據表"><table><thead><tr><th>指標／資料期間</th><th>口徑</th><th>本期數值</th><th>發布前已知上期</th><th>本次公布的上期</th><th>本機修訂</th></tr></thead><tbody id="values"></tbody></table></div></section>
+    <div class="macro-columns">
+      <section aria-labelledby="calendar-title"><h2 id="calendar-title">發布日曆</h2><p class="macro-note">最近 7 天至未來 30 天；時間顯示為臺北時間。</p><div id="calendar"></div><button id="calendar-more" type="button" hidden>載入更多發布</button></section>
+      <section aria-labelledby="sources-title"><h2 id="sources-title">來源狀態</h2><div id="sources"></div></section>
+    </div>
+    <section aria-labelledby="history-title"><div class="macro-section-heading"><h2 id="history-title">歷史觀測</h2><label>指標 <select id="indicator" aria-label="歷史指標"></select></label><label><input id="revisions" type="checkbox"> 包含本機修訂版本</label></div><p id="history-status" role="status"></p><div class="macro-table-scroll" tabindex="0" aria-label="歷史觀測表"><table><thead><tr><th>資料期間</th><th>數值</th><th>口徑</th><th>本機修訂</th><th>取得時間（臺北）</th><th>來源</th></tr></thead><tbody id="history"></tbody></table></div><button id="history-more" type="button" hidden>載入較早觀測</button></section>
+    <section id="method" class="macro-method"><h2>如何閱讀這些數據</h2><p>月增與年增不可混用；季調與未季調各有不同口徑。發布時間是官方預定解禁時間，取得時間是 Atlas 實際觀測時間，並不保證公布後立即取得。</p><p>「發布前已知上期」缺值，表示當時未取得該值。「本次公布的上期」是本次表格所列上期數值。修訂 0 代表本機首見，不能保證是官方初值。歷史範圍包含已取得的官方表格窗口與之後累積的觀測。</p><p>目前未接市場預期與 surprise，也不提供交易方向判斷。部分原始表格受保存大小上限限制；原始官方連結仍可查閱。</p></section>
+  </main>
+  <footer class="page-shell macro-footer">Open Intel Atlas · <span id="checked-at">等待資料時間</span></footer>
+  <noscript><p>請啟用 JavaScript 以讀取官方數據。</p></noscript>
+  <script type="module" src="/macro.js"></script>
+</body></html>

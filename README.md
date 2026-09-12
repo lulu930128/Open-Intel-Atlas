@@ -2,23 +2,34 @@
 
 Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓取公開資料源，整理成統一的事件格式，提供人類可讀的 newsroom、全屏世界地圖，以及給其他程式或 AI agent 呼叫的 JSON API。
 
-目前版本：`1.3.0`
+目前版本：`1.4.0`
 
 這不是 World Monitor 的 clone。此專案使用自己的資料模型、API contract、UI 版面、source registry 和本地 SQLite 儲存方式。
 
 ## 目前實作狀態
 
+### Macro Intelligence（收尾候選版；正式 runtime 已採用）
+
+schema v11 保存 CPI／PPI／PCE、就業與薪資、GDP、失業保險申請與 FOMC 的官方觀測、發布日曆與 observed revision history。共 39 個指標由 `/api/v1/macro/*` 與四個 `atlas.macro.*` MCP tools 共用唯讀 capability；首頁導覽最右側「總體數據」開啟獨立 `/macro.html`。13 個 Macro 來源在新安裝預設停用，本機於 2026-09-12 備份後啟用。DOL PDF 解析需要設定 `MACRO_PDFTOTEXT_PATH`，指向既有 Poppler `pdftotext`。第一版口徑見 [Macro v1 契約](docs/agent-runs/macro-intelligence-v1/Contract.md)。
+
+通用底層支援月／週／季／年／事件期別、estimate stage、凍結 completeness 規則、時間與 watch evidence、artifact lineage。新增四組官方 provider 已完成正式採集與 REST／MCP 對照；GDP 保留估計階段，Claims 區分初領與續領週別，FOMC 保存決議與 date-only 生效日期。發布窗口即時性、歷史全量補齊仍未驗收；詳見[來源實作與驗證紀錄](docs/agent-runs/macro-sources/Progress.md)。
+
+收尾候選版本包含必要 canonical backend 與頁面依賴，乾淨候選版本通過 162 項測試；Git checkpoint 待明確 commit 授權。正式 `/api/v1/runtime` 提供啟動時 backend／Macro UI 指紋；七組四種 capability 的完整投影與 owner connection 唯讀驗證見[收尾紀錄](docs/agent-runs/macro-closeout/Progress.md)。本機尚有其他工作線未提交，不能把候選版本驗收說成整個工作目錄已 clean。
+
+可執行 `node scripts/verify-macro-sample.mjs --live`，以七次 bounded 官方請求、暫存 DB 驗證真實樣本與 REST／MCP parity；不修改正式 DB、不重啟 Tray。這項驗證不代表正式 runtime adoption 或發布窗口延遲驗收。
+
 - Node.js 24+ 原生 HTTP server，無前端框架；MCP transport 使用官方 TypeScript SDK v2 與 Zod schema validation。
 - 新的 canonical pipeline 採用 `Source → Document → Story → Event`，保留來源、raw fetch、衍生方法與證據 lineage。
-- 33 個 source adapter 已註冊；26 個預設可啟用，7 個會在缺少設定、transport gate 未通過或未明確開啟時 fail closed。
+- 51 個 source adapter 已註冊；30 個預設可啟用，21 個會在缺少設定、transport／rights gate 未通過或未明確開啟時 fail closed。
 - 每個來源各自保存 run status、最後成功／失敗、錯誤、筆數與 latency；單一來源失敗不會拖垮查詢 API。
-- SQLite schema v5 保存每個來源的 `next_due_at`、lease、failure count、backoff 與 catch-up gap，以 append-only `story_updates` 保存 consumer 可續接的 Story/Event 變化，並保存 Document-owned media、可稽核的 PromotionDecision 與獨立於事件地點的 RegionalRelevance；process 重啟後不會把排程、promotion/relevance audit 或 change cursor truth 歸零。
+- SQLite schema v11 保存 source／target 各自的 `next_due_at`、failure count 與 backoff，並以 `document_observations` 保留多 provider／target discovery lineage；既有 canonical Company/Security identifiers、relations、resolution ledger、master snapshot 與 Story/Event change cursor 均維持單一 truth。
 - 可使用 ETag／Last-Modified 時送出 conditional GET；HTTP 304 視為來源成功但不建立重複 Document。
 - freshness 同時提供全域與 politics／technology／finance／hazards 分領域 coverage。
-- `/api/v1/*` 提供 versioned documents、stories、events、entities、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 source-level consumer contract 為 `1.2`。
+- `/api/v1/*` 提供 versioned documents、stories、events、entities、company news、search、brief、durable change feed、representation profiles、source health 與 collector API；目前 source-level consumer contract 為 `1.2`。
 - `/mcp` 提供 loopback-only、read-only 的 Atlas tools/resources；REST 與 MCP 共用同一個 backend capability layer，不各自計算 freshness、coverage 或 verification。
-- 首頁是 newsroom-first 摘要版面，顯示本期頭條、live desk、6 則最新報導、四個領域入口、搜尋與資料缺口；完整領域事件流、來源健康與 evidence view 位於 `/domain.html?domain=politics|technology|finance|hazards`。Hero、Latest 前三則與 Domain 子頁 lead 只在 backend-selected `representative_media` 可 `remote_embed` 時顯示來源圖片，沒有合法圖片時使用自然收合的純文字版面。
+- 首頁是 newsroom-first 摘要版面，顯示本期頭條、live desk、6 則最新報導、四個領域入口、搜尋與資料缺口；完整領域事件流、來源健康與 evidence view 位於 `/domain.html?domain=politics|technology|finance|hazards`。Finance 子頁另讀 backend-owned Company News projection，保持 Document 與 Event 分層。Hero、Latest 前三則與 Domain 子頁 lead 只在 backend-selected `representative_media` 可 `remote_embed` 時顯示來源圖片，沒有合法圖片時使用自然收合的純文字版面。
 - `/atlas.html` 是獨立全屏情報地圖；它以 cursor pagination 讀取 canonical `/api/v1/events`，只有具備可驗證座標的事件會放置 marker，但無座標事件仍保留在列表。國家關聯只使用 backend `location.country_code`，不從標題猜測。
+- `/stocks.html?exchange=TWSE&symbol=2330` 是 Company Intelligence dossier；公司正式名稱、identifier、Security 關係、事件與來源文件都由同一個 backend capability 投影，並直接顯示 entity-specific master／重大訊息／一般新聞 coverage 的 current／partial／stale／missing／unknown。
 - `/api/dispatch`、`/api/events`、`/api/sources`、`/api/dashboard`、`/api/stories` 與 `/api/topics` 是由 canonical store 投影的 legacy compatibility surface；正式 UI 與新 consumer 應使用 `/api/v1` 或 MCP capability。
 - v1 canonical data 寫入單一 `data/db/atlas.sqlite`，以關聯表表達多領域資料，不再一類別一個 DB。
 - 舊分類 DB 與 dashboard DB 可能繼續存在於本機，但不會由 v1 migration 刪除或由目前 runtime 讀寫；legacy `/api/*` 直接投影 canonical store。
@@ -30,7 +41,7 @@ Open Intel Atlas 是一個本地優先的公開情報監測基礎版。它會抓
 
 - 政治：GDELT DOC、BBC World RSS、U.S. Federal Register、Congress.gov、總統府、行政院、外交部、日本防衛省、NDL 國會會議錄 metadata；METI official Atom 已註冊但因 compliant Node transport 回 403 而預設停用。
 - 科技：arXiv、CISA KEV、CISA Advisories、NVD CVE、OSV.dev、Semantic Scholar、JPCERT/CC Alerts。
-- 金融：TWSE 重大訊息、SEC EDGAR、CoinGecko、Frankfurter、FRED、ECB、World Bank。
+- 金融：TWSE 上市、TPEx 上櫃與 TPEx 興櫃公司 master、TWSE／TPEx 重大訊息、Yahoo 台股個股 RSS、SEC EDGAR、CoinGecko、Frankfurter、FRED、ECB、World Bank。Yahoo RSS 只有在 `ATLAS_CONTENT_USAGE_CONTEXT=personal_noncommercial` 時啟用，並保留「Yahoo股市」attribution、原文連結及 best-effort target coverage。
 - 氣象／災害：USGS、NASA EONET、GDACS、ReliefWeb、臺灣 CWA、民生示警公開資料平台 NCDR active CAP、U.S. NWS、日本氣象廳 JMAXML、日本消防庁 FDMA 災害應變 RSS。
 
 預設未啟用或缺少設定的來源會明確顯示 `disabled_reason`：Congress.gov、SEC EDGAR、FRED、ReliefWeb、CWA、Semantic Scholar 與 METI。METI 的 fixture／isolated contract 已完成，但正式 Atlas User-Agent 在 2026-08-30 取得 HTTP 403，因此不以瀏覽器偽裝繞過。市場觀測值、研究論文與 routine legislative/policy records 會保存為 Document，但不會自動把每個價位、論文或會議升格成 Event。
@@ -42,6 +53,12 @@ NVD attribution notice:
 正式商用前，仍需要逐一確認每個 upstream source 的 terms、attribution、cache、rate limit、redistribution 限制。
 
 ## 本地啟動
+
+### 地區篩選與公司新聞（working tree）
+
+首頁與領域頁共用 `presentation=global|east_asia|taiwan_focus|japan_focus`，地區事件與相關事件報導由 backend 篩選。來源健康仍為全域／領域統計。公司搜尋可開啟 Stocks，預設顯示 exact-stock 新聞並保留事件、證據與公司資料分頁。這批變更需要 backend 重新載入；舊 runtime 缺少地區 query contract 時，UI 會顯示無法讀取，避免將全域內容誤標為地區資料。
+
+契約與驗收紀錄見 [地區與公司新聞 UI 契約](docs/agent-runs/frontend-regional-stock-news-v1/Contract.md) 及 [實作進度](docs/agent-runs/frontend-regional-stock-news-v1/Progress.md)。真實資料副本驗收不代表正式 Tray 已採用。
 
 ```powershell
 npm start
@@ -65,11 +82,13 @@ Node.js >= 24
 
 `scripts/atlas-tray.ps1` 是 Windows 本機 runtime 的唯一 owner。它會使用工作區實際保存的 `manosaba_icon_56x56_under10KB.png` 作為托盤 icon，隱藏啟動後端，並提供：
 
-- 雙擊 icon 或選擇「開啟 Atlas」開啟 `http://127.0.0.1:8790`。
+- 雙擊 icon 或選擇「開啟 Atlas」會開啟本次實際選定的 loopback port；預設仍優先使用 `http://127.0.0.1:8790`。
 - 啟動、停止、重新啟動後端與重新檢查 API 狀態。
 - backend 異常結束後 bounded backoff 重啟。
+- 以 Windows Job Object 綁定自己建立的 backend；即使 tray 被硬中止，也不會留下 orphan backend。
 - Explorer/taskbar 重啟與重複 launcher 呼叫時重新註冊既有 icon，不建立第二個 instance。
-- 只停止自己建立的 process tree；若 port 已被其他程序使用，托盤不會接管或 broad-kill。
+- 啟動前以 bind probe 區分 port 可用、已有 listener 與 Windows reserved/excluded range；若設定 port 被系統保留且沒有 listener，只從 `ATLAS_PORT_FALLBACKS` 的 bounded 清單選擇備援 port。
+- 只停止自己建立的 process tree；若 port 已被其他程序使用，托盤不會接管或 broad-kill，也不會把真實 listener 誤當成可安全切換的 reserved port。
 
 手動隱藏啟動：
 
@@ -77,7 +96,9 @@ Node.js >= 24
 wscript.exe .\scripts\start-atlas-tray.vbs
 ```
 
-托盤與 backend log 位於 `data/logs/`，已由 `.gitignore` 排除。
+直接執行這個 VBS 代表人工開啟意圖：若 Atlas 已在執行，既有 Tray 會開啟目前實際選定 port 的 Dashboard；若是 cold start，會等 `/api/v1/health` 成功後只開一次。登入啟動捷徑則帶 `--background`，只常駐 Tray/backend，不彈出瀏覽器。
+
+托盤與 backend log 位於 `data/logs/`，已由 `.gitignore` 排除。實際選定 port 會寫入 `data/runtime/atlas-port.json`，供診斷與其他本機 consumer 查詢。
 
 Windows 可能在第一次啟動時把新 icon 放進通知區域的 `^` overflow；是否固定顯示由使用者的 taskbar 偏好控制，安裝腳本不會修改個人化設定。
 
@@ -110,8 +131,13 @@ GET  /api/v1/stories
 GET  /api/v1/stories/:id
 GET  /api/v1/events
 GET  /api/v1/events/:id
+GET  /api/v1/company-news?market=TWSE&market=TPEX&limit=20
 GET  /api/v1/entities
 GET  /api/v1/entities/:id/events
+GET  /api/v1/companies
+GET  /api/v1/companies/:id
+GET  /api/v1/companies/:id/events|evidence|relations|snapshot
+GET  /api/v1/stocks/:exchange/:symbol
 GET  /api/v1/search?q=...
 GET  /api/v1/brief?profile=brief_compact_v1
 GET  /api/v1/brief?presentation=east_asia
@@ -120,7 +146,7 @@ GET  /api/v1/collector
 POST /api/v1/collect?source=gdacs-events  (loopback only；scheduler 啟用時回傳 202 queued)
 ```
 
-列表支援 bounded `limit=1..200` 與 `cursor`。依資源可用 `domain`、`source`、`document_type`、`event_type`、`severity`、`verification`、`lifecycle`、`country`、`entity`、`from`、`to`、`q` 篩選。錯誤固定回傳 `{ "error": { "code", "message" } }`。
+列表支援 bounded `limit=1..200` 與 opaque、filter-scoped `cursor`。Company News 固定為 `limit=1..50`，只接受 TWSE／TPEX，可重複 `market` 或使用逗號分隔；Company list／events／evidence／relations／news 另揭露 serialized item byte budget 與是否因 budget 截斷。其他資源依能力支援 `domain`、`source`、`document_type`、`event_type`、`severity`、`verification`、`lifecycle`、`country`、`entity`、`from`、`to`、`q`。錯誤固定回傳 `{ "error": { "code", "message" } }`。
 
 Consumer profiles 由 `/api/v1/profiles` 發布，目前包含：
 
@@ -129,6 +155,7 @@ Consumer profiles 由 `/api/v1/profiles` 發布，目前包含：
 - `story_detail_v1`：Story 與 compact Event。
 - `evidence_pack_v1`：OMI／分析 consumer 使用的較完整 evidence。
 - `source_status_v1`、`latest_events_v1`、`search_results_v1`、`domain_registry_v1`。
+- `company_list_v1`、`company_profile_v1`、`company_events_v1`、`company_evidence_v1`、`company_relations_v1`、`company_snapshot_v1`、`company_news_latest_v1`。
 
 在 REST 可分別用 `/events?profile=latest_events_v1`、`/search?profile=search_results_v1`、`/stories/:id?profile=story_detail_v1`、`/sources?profile=source_status_v1` 與 `/domains?profile=domain_registry_v1` 取得和 MCP 相同的投影。
 
@@ -159,6 +186,12 @@ atlas.story.get
 atlas.brief
 atlas.changes
 atlas.sources.status
+atlas.company.list
+atlas.company.get
+atlas.company.events
+atlas.company.evidence
+atlas.company.relations
+atlas.company.snapshot
 ```
 
 目前 resources：
@@ -278,11 +311,17 @@ data/db/dashboard.sqlite
 - source freshness 以 `last_success_at` 與 cadence 計算；`data_as_of` 另外表示該 scope 最近一次 Document ingestion。
 - `/api/v1/freshness?domain=...` 只計算該領域的 enabled／failed／stale／disabled sources。
 
-Windows 登入後常駐可先用 dry-run 檢查。Scheduled Task 採目前使用者 `AtLogOn`、interactive、hidden window 與 `IgnoreNew`，action 直接指向托盤 launcher；backend 不再由第二套登入 action 另外啟動：
+Windows 登入後常駐可先用 dry-run 檢查。主 Scheduled Task 採目前使用者 `AtLogOn`、interactive、hidden window 與 `IgnoreNew`，action 直接指向托盤 launcher；短命的 recovery task 每分鐘只檢查主 task 是否仍在，必要時啟動原本的唯一 tray owner，本身不啟動或接管 backend。從 tray 選擇「結束托盤並停止後端」會暫停 recovery，下一次登入或手動啟動 tray 時解除暫停：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-atlas-logon-task.ps1 -WhatIf
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-atlas-logon-task.ps1 -StartNow
+```
+
+既有工作要採用新版 lifecycle 時，使用 `-Force -StartNow` 取代同名定義；這會短暫重啟目前的 Atlas runtime：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-atlas-logon-task.ps1 -Force -StartNow
 ```
 
 解除 Windows 登入啟動不會停止目前正在執行的托盤：

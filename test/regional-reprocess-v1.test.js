@@ -12,6 +12,8 @@ import { attachDocumentToStory } from "../src/atlasStories.js";
 import { loadConfig } from "../src/config.js";
 import { createIntelDocument } from "../src/documents/normalize.js";
 
+const NOW = "2026-08-30T12:00:00.000Z";
+
 test("bounded regional reprocess 在 schema-only copy apply-twice 保持冪等且不改 event country", async (t) => {
   const tempRoot = mkdtempSync(join(tmpdir(), "open-intel-atlas-reprocess-test-"));
   const config = loadConfig({
@@ -68,7 +70,7 @@ test("bounded regional reprocess 在 schema-only copy apply-twice 保持冪等�
     enabled: [source],
     get(id) { return id === source.id ? source : null; }
   };
-  const runtime = createAtlasRuntime({ config, registry });
+  const runtime = createAtlasRuntime({ config, registry, clock: () => new Date(NOW) });
   t.after(async () => {
     await runtime.close();
     rmSync(tempRoot, { recursive: true, force: true });

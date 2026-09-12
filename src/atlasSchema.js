@@ -1,4 +1,8 @@
-export const SCHEMA_VERSION = 5;
+import { migrateMacroV9 } from "./macro/schema.js";
+import { migrateMacroV10 } from "./macro/migrationV10.js";
+import { migrateMacroV11 } from "./macro/migrationV11.js";
+
+export const SCHEMA_VERSION = 11;
 
 export function initializeAtlasSchema(db) {
   db.exec(`
@@ -25,6 +29,7 @@ export function initializeAtlasSchema(db) {
       attribution TEXT,
       policy_note TEXT,
       media_policy_json TEXT NOT NULL DEFAULT '{}',
+      coverage_json TEXT NOT NULL DEFAULT '{}',
       enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
       disabled_reason TEXT,
       domains_json TEXT NOT NULL,
@@ -49,6 +54,15 @@ export function initializeAtlasSchema(db) {
       error_type TEXT,
       error_message TEXT,
       duration_ms INTEGER,
+      upstream_item_count INTEGER,
+      processed_item_count INTEGER,
+      document_count INTEGER NOT NULL DEFAULT 0,
+      entity_count INTEGER NOT NULL DEFAULT 0,
+      relation_count INTEGER NOT NULL DEFAULT 0,
+      intentionally_skipped_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+      warnings_json TEXT NOT NULL DEFAULT '[]',
       FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE RESTRICT
     );
 
@@ -68,6 +82,52 @@ export function initializeAtlasSchema(db) {
       last_catchup_to TEXT,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS source_targets (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      entity_id TEXT,
+      security_id TEXT,
+      identifier_namespace TEXT NOT NULL,
+      identifier_authority TEXT NOT NULL,
+      identifier_scope TEXT NOT NULL,
+      identifier_value TEXT NOT NULL,
+      request_key TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      priority_tier INTEGER NOT NULL DEFAULT 100,
+      cadence_ms INTEGER NOT NULL,
+      next_due_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
+      backoff_until TEXT,
+      last_attempt_at TEXT,
+      last_success_at TEXT,
+      last_match_at TEXT,
+      last_outcome TEXT,
+      policy_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (source_id, identifier_namespace, identifier_authority, identifier_scope, identifier_value),
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      FOREIGN KEY (entity_id) REFERENCES entities(id) ON UPDATE CASCADE ON DELETE SET NULL,
+      FOREIGN KEY (security_id) REFERENCES entities(id) ON UPDATE CASCADE ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS source_target_runs (
+      id TEXT PRIMARY KEY,
+      source_target_id TEXT NOT NULL,
+      source_run_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL CHECK (status IN ('running', 'success', 'partial', 'failed', 'rate_limited', 'disabled')),
+      http_status INTEGER,
+      item_count INTEGER NOT NULL DEFAULT 0,
+      error_type TEXT,
+      error_message TEXT,
+      duration_ms INTEGER,
+      warnings_json TEXT NOT NULL DEFAULT '[]',
+      FOREIGN KEY (source_target_id) REFERENCES source_targets(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS raw_fetches (
@@ -121,6 +181,26 @@ export function initializeAtlasSchema(db) {
       FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE RESTRICT,
       FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
       FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS document_observations (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_run_id TEXT,
+      raw_fetch_id TEXT,
+      source_target_id TEXT,
+      discovered_url TEXT,
+      observed_at TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (document_id, source_id, source_target_id, discovered_url),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL,
+      FOREIGN KEY (source_target_id) REFERENCES source_targets(id) ON UPDATE CASCADE ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS document_domains (
@@ -270,8 +350,169 @@ export function initializeAtlasSchema(db) {
       entity_id TEXT NOT NULL,
       alias TEXT NOT NULL,
       language TEXT,
+      normalized_alias TEXT,
+      alias_type TEXT NOT NULL DEFAULT 'name',
+      source_id TEXT,
+      source_run_id TEXT,
+      raw_fetch_id TEXT,
+      method TEXT NOT NULL DEFAULT 'legacy',
+      confidence REAL NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+      valid_from TEXT,
+      valid_to TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'superseded')),
+      created_at TEXT,
+      updated_at TEXT,
       PRIMARY KEY (entity_id, alias),
+      FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE SET NULL,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_identifiers (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT '',
+      normalized_value TEXT NOT NULL,
+      display_value TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'superseded')),
+      valid_from TEXT,
+      valid_to TEXT,
+      source_id TEXT,
+      source_run_id TEXT,
+      raw_fetch_id TEXT,
+      confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+      method TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE SET NULL,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_relations (
+      id TEXT PRIMARY KEY,
+      from_entity_id TEXT NOT NULL,
+      to_entity_id TEXT NOT NULL,
+      relation_type TEXT NOT NULL CHECK (relation_type IN ('issued_by', 'listed_as', 'represents', 'same_issuer', 'parent_of', 'subsidiary_of')),
+      source_id TEXT,
+      source_run_id TEXT,
+      raw_fetch_id TEXT,
+      confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+      method TEXT NOT NULL,
+      valid_from TEXT,
+      valid_to TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'superseded')),
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (from_entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (to_entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE SET NULL,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_resolution_runs (
+      id TEXT PRIMARY KEY,
+      method TEXT NOT NULL,
+      version TEXT NOT NULL,
+      input_scope TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      resolved_count INTEGER NOT NULL DEFAULT 0,
+      unresolved_count INTEGER NOT NULL DEFAULT 0,
+      ambiguous_count INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      warnings_json TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE TABLE IF NOT EXISTS unresolved_entity_mentions (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      mention_text TEXT NOT NULL,
+      normalized_text TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      candidate_json TEXT NOT NULL DEFAULT '[]',
+      resolution_run_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (resolution_run_id) REFERENCES entity_resolution_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS document_entity_mentions (
+      document_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('issuer', 'subject', 'mentioned', 'regulator', 'publisher')),
+      method TEXT NOT NULL,
+      confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+      matched_text TEXT,
+      resolution_run_id TEXT,
+      source_id TEXT,
+      source_run_id TEXT,
+      raw_fetch_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (document_id, entity_id, role, method),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (resolution_run_id) REFERENCES entity_resolution_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE SET NULL,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY (raw_fetch_id) REFERENCES raw_fetches(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS story_entity_links (
+      story_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      relationship_type TEXT NOT NULL,
+      relationship_confidence REAL NOT NULL CHECK (relationship_confidence >= 0 AND relationship_confidence <= 1),
+      relevance_score REAL NOT NULL CHECK (relevance_score >= 0 AND relevance_score <= 1),
+      entity_event_materiality TEXT NOT NULL CHECK (entity_event_materiality IN ('direct', 'related', 'contextual', 'unknown')),
+      reason_codes_json TEXT NOT NULL DEFAULT '[]',
+      resolution_method TEXT NOT NULL,
+      resolution_version TEXT NOT NULL,
+      evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+      first_detected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (story_id, entity_id, relationship_type),
+      FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
       FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_master_snapshots (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      source_run_id TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK (status IN ('complete', 'partial', 'unknown', 'failed')),
+      snapshot_complete INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_complete IN (0, 1)),
+      truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+      upstream_item_count INTEGER,
+      member_count INTEGER NOT NULL DEFAULT 0,
+      content_hash TEXT,
+      warnings_json TEXT NOT NULL DEFAULT '[]',
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+      FOREIGN KEY (source_run_id) REFERENCES source_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_master_snapshot_members (
+      snapshot_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      identifier_id TEXT,
+      observed_status TEXT NOT NULL DEFAULT 'active',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      PRIMARY KEY (snapshot_id, entity_id),
+      FOREIGN KEY (snapshot_id) REFERENCES entity_master_snapshots(id) ON DELETE CASCADE,
+      FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE RESTRICT,
+      FOREIGN KEY (identifier_id) REFERENCES entity_identifiers(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS event_entities (
@@ -345,11 +586,17 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_source_runs_source_started ON source_runs(source_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_source_runs_status ON source_runs(status, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_source_schedule_due ON source_schedule_state(next_due_at, lease_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_source_targets_due ON source_targets(source_id, enabled, next_due_at, backoff_until, priority_tier);
+    CREATE INDEX IF NOT EXISTS idx_source_targets_identifier ON source_targets(identifier_namespace, identifier_authority, identifier_scope, identifier_value);
+    CREATE INDEX IF NOT EXISTS idx_source_target_runs_target ON source_target_runs(source_target_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_source_target_runs_source_run ON source_target_runs(source_run_id);
     CREATE INDEX IF NOT EXISTS idx_raw_fetches_run ON raw_fetches(source_run_id);
     CREATE INDEX IF NOT EXISTS idx_documents_source_time ON documents(source_id, observed_at DESC);
     CREATE INDEX IF NOT EXISTS idx_documents_published ON documents(published_at DESC);
     CREATE INDEX IF NOT EXISTS idx_documents_event_key ON documents(event_key) WHERE event_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_documents_dedupe ON documents(source_id, dedupe_key);
+    CREATE INDEX IF NOT EXISTS idx_document_observations_document ON document_observations(document_id, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_document_observations_target ON document_observations(source_target_id, observed_at DESC);
     CREATE INDEX IF NOT EXISTS idx_document_domains_domain ON document_domains(domain, document_id);
     CREATE INDEX IF NOT EXISTS idx_document_promotion_status ON document_promotion_decisions(status, eligible);
     CREATE INDEX IF NOT EXISTS idx_document_media_document ON document_media(document_id, is_representative DESC);
@@ -364,6 +611,15 @@ export function initializeAtlasSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_event_domains_domain ON event_domains(domain, event_id);
     CREATE INDEX IF NOT EXISTS idx_event_evidence_document ON event_evidence(document_id);
     CREATE INDEX IF NOT EXISTS idx_entity_aliases_alias ON entity_aliases(alias);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_identifiers_active_scope
+      ON entity_identifiers(namespace, authority, scope, normalized_value) WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_entity_identifiers_entity ON entity_identifiers(entity_id, status);
+    CREATE INDEX IF NOT EXISTS idx_entity_relations_from ON entity_relations(from_entity_id, relation_type, status);
+    CREATE INDEX IF NOT EXISTS idx_entity_relations_to ON entity_relations(to_entity_id, relation_type, status);
+    CREATE INDEX IF NOT EXISTS idx_document_entity_mentions_entity ON document_entity_mentions(entity_id, updated_at DESC, document_id);
+    CREATE INDEX IF NOT EXISTS idx_story_entity_links_entity ON story_entity_links(entity_id, updated_at DESC, story_id);
+    CREATE INDEX IF NOT EXISTS idx_unresolved_mentions_document ON unresolved_entity_mentions(document_id, resolved_at);
+    CREATE INDEX IF NOT EXISTS idx_entity_master_snapshots_source ON entity_master_snapshots(source_id, observed_at DESC);
     CREATE INDEX IF NOT EXISTS idx_event_entities_entity ON event_entities(entity_id, event_id);
     CREATE INDEX IF NOT EXISTS idx_event_locations_country ON event_locations(country_code, event_id);
     CREATE INDEX IF NOT EXISTS idx_event_regional_relevance_region ON event_regional_relevance(region_code, score DESC, event_id);
@@ -382,6 +638,18 @@ export function initializeAtlasSchema(db) {
   migrateSourcesV4(db);
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(4, now);
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(5, now);
+  migrateEntitiesV6(db);
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(6, now);
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(7, now);
+  const eventColumns = new Set(db.prepare("PRAGMA table_info(events)").all().map((column) => column.name));
+  const documentColumns = new Set(db.prepare("PRAGMA table_info(documents)").all().map((column) => column.name));
+  if (!documentColumns.has("classification_json")) db.exec("ALTER TABLE documents ADD COLUMN classification_json TEXT");
+  if (!eventColumns.has("publication_status")) db.exec("ALTER TABLE events ADD COLUMN publication_status TEXT NOT NULL DEFAULT 'published' CHECK (publication_status IN ('published', 'held'))");
+  if (!eventColumns.has("publication_reason")) db.exec("ALTER TABLE events ADD COLUMN publication_reason TEXT");
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(8, now);
+  migrateMacroV9(db, now);
+  migrateMacroV10(db, now);
+  migrateMacroV11(db, now);
 }
 
 function migrateSourcesV2(db) {
@@ -419,5 +687,50 @@ function migrateSourcesV4(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(sources)").all().map((column) => column.name));
   if (!columns.has("media_policy_json")) {
     db.exec("ALTER TABLE sources ADD COLUMN media_policy_json TEXT NOT NULL DEFAULT '{}'");
+  }
+}
+
+function migrateEntitiesV6(db) {
+  addColumns(db, "sources", [
+    ["coverage_json", "TEXT NOT NULL DEFAULT '{}'"]
+  ]);
+  addColumns(db, "source_runs", [
+    ["upstream_item_count", "INTEGER"],
+    ["processed_item_count", "INTEGER"],
+    ["document_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["entity_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["relation_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["intentionally_skipped_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["failed_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["truncated", "INTEGER NOT NULL DEFAULT 0"],
+    ["warnings_json", "TEXT NOT NULL DEFAULT '[]'"]
+  ]);
+  addColumns(db, "entity_aliases", [
+    ["normalized_alias", "TEXT"],
+    ["alias_type", "TEXT NOT NULL DEFAULT 'name'"],
+    ["source_id", "TEXT"],
+    ["source_run_id", "TEXT"],
+    ["raw_fetch_id", "TEXT"],
+    ["method", "TEXT NOT NULL DEFAULT 'legacy'"],
+    ["confidence", "REAL NOT NULL DEFAULT 1"],
+    ["valid_from", "TEXT"],
+    ["valid_to", "TEXT"],
+    ["status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["created_at", "TEXT"],
+    ["updated_at", "TEXT"]
+  ]);
+  db.exec(`
+    UPDATE entity_aliases
+    SET normalized_alias = lower(trim(alias))
+    WHERE normalized_alias IS NULL OR normalized_alias = '';
+    CREATE INDEX IF NOT EXISTS idx_entity_aliases_normalized
+      ON entity_aliases(normalized_alias, status, entity_id);
+  `);
+}
+
+function addColumns(db, table, additions) {
+  const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   }
 }

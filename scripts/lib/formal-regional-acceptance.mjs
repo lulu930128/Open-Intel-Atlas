@@ -13,10 +13,10 @@ export const DISABLED_REGIONAL_SOURCE_IDS = ["jp-meti-latest"];
 export function evaluateFormalRuntime({ health, sources, presentations }) {
   const errors = [];
   if (health?.ok !== true) errors.push("health did not report ok=true");
-  if (health?.version !== "1.3.0") errors.push(`expected runtime version 1.3.0, received ${health?.version ?? "missing"}`);
+  if (health?.version !== "1.4.0") errors.push(`expected runtime version 1.4.0, received ${health?.version ?? "missing"}`);
   if (health?.contract_version !== "1.2") errors.push(`expected consumer contract 1.2, received ${health?.contract_version ?? "missing"}`);
-  if (health?.storage?.schema_version !== 5) errors.push(`expected schema 5, received ${health?.storage?.schema_version ?? "missing"}`);
-  if (health?.storage?.sources !== 33) errors.push(`expected 33 registered sources, received ${health?.storage?.sources ?? "missing"}`);
+  if (health?.storage?.schema_version !== 11) errors.push(`expected schema 11, received ${health?.storage?.schema_version ?? "missing"}`);
+  if (health?.storage?.sources !== 51) errors.push(`expected 51 registered sources, received ${health?.storage?.sources ?? "missing"}`);
   if (health?.scheduler?.enabled !== true) errors.push("formal scheduler is not enabled");
 
   const byId = new Map((sources || []).map((source) => [source.id, source]));

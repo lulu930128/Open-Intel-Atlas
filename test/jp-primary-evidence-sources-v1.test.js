@@ -14,8 +14,8 @@ const NOW = "2026-08-30T12:00:00.000Z";
 
 test("FDMA、METI、NDL 以 canonical registry 揭露官方來源契約", () => {
   const registry = buildSourceRegistry(loadConfig({ ATLAS_AUTO_COLLECT: "false" }));
-  assert.equal(registry.all.length, 33);
-  assert.equal(registry.enabled.length, 26);
+  assert.equal(registry.all.length, 51);
+  assert.equal(registry.enabled.length, 30);
 
   const fdma = registry.get("jp-fdma-disaster-info");
   const meti = registry.get("jp-meti-latest");
@@ -85,7 +85,8 @@ test("METI official policy feed 保持 Document-only 並投影跨領域 metadata
   assert.equal(document.raw_metadata.event_eligible, false);
   assert.equal(document.raw_metadata.evidence_support, true);
   assert.equal(document.raw_metadata.source_scope, "JP");
-  assert.deepEqual(document.domains.map((entry) => entry.domain), ["politics", "technology", "finance"]);
+  assert.deepEqual(document.domains.map((entry) => entry.domain), ["finance", "technology"]);
+  assert.equal(document.classification.method, "deterministic-content-domains");
 });
 
 test("NDL 只抓一個 bounded meeting-list page，不保存 speech text", async () => {
@@ -167,7 +168,7 @@ test("三來源 isolated store 重跑冪等，FDMA 只有 regional relevance、�
       throw new Error(`unexpected JSON fixture URL: ${url}`);
     }
   };
-  const runtime = createAtlasRuntime({ config, registry, http });
+  const runtime = createAtlasRuntime({ config, registry, http, clock: () => new Date(NOW) });
   t.after(async () => {
     await runtime.close();
     rmSync(tempRoot, { recursive: true, force: true });

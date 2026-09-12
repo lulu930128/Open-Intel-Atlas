@@ -13,8 +13,8 @@ const NOW = "2026-08-30T12:00:00.000Z";
 
 test("NCDR active CAP source 由 canonical registry 揭露且不需 credential", () => {
   const registry = buildSourceRegistry(loadConfig({ ATLAS_AUTO_COLLECT: "false" }));
-  assert.equal(registry.all.length, 33);
-  assert.equal(registry.enabled.length, 26);
+  assert.equal(registry.all.length, 51);
+  assert.equal(registry.enabled.length, 30);
 
   const source = registry.get("tw-ncdr-active-cap-alerts");
   assert.ok(source);
@@ -94,7 +94,7 @@ test("NCDR isolated store 重跑冪等，只建立 TW relevance、不建立假 l
     get(id) { return id === source.id ? source : null; }
   };
   const http = { getText: async (url) => fetchFixture(url, ncdrFixture({ onlyActive: true })) };
-  const runtime = createAtlasRuntime({ config, registry, http });
+  const runtime = createAtlasRuntime({ config, registry, http, clock: () => new Date(NOW) });
   t.after(async () => {
     await runtime.close();
     rmSync(tempRoot, { recursive: true, force: true });

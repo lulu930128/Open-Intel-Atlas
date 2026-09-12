@@ -1,7 +1,56 @@
 import { deriveEventForStory } from "./atlasEvents.js";
 import { evaluateDocumentPromotion } from "./atlasPromotion.js";
+import { withDocumentClassification } from "./atlasClassification.js";
 
 const MAX_REPROCESS_ITEMS = 10_000;
+
+// Administrative only. Callers must use an explicitly selected database copy.
+// No ingestion timestamps, identity, observations or source runs are rewritten.
+export function applyClassificationConvergence(store, { maxDocuments = 10000, evaluatedAt = new Date().toISOString() } = {}) {
+  if (!Number.isInteger(maxDocuments) || maxDocuments < 1 || maxDocuments > MAX_REPROCESS_ITEMS) throw new Error("Invalid convergence bound");
+  return store.transaction(() => {
+    const total = tableCount(store.db, "documents");
+    if (total > maxDocuments) throw new Error(`Convergence scope truncated: ${total} documents exceeds ${maxDocuments}`);
+    let documentWrites = 0;
+    let promotionWrites = 0;
+    let eventWrites = 0;
+    let heldEvents = 0;
+    const stories = new Set();
+    const samples = [];
+    for (const id of selectIds(store.db, "documents", maxDocuments)) {
+      const current = store.getDocument(id, true);
+      const document = withDocumentClassification(current);
+      const decision = evaluateDocumentPromotion(document, evaluatedAt);
+      const classificationChanged = JSON.stringify(current.classification) !== JSON.stringify(document.classification);
+      const promotionChanged = decisionSignature(current.promotion_decision) !== decisionSignature(decision);
+      for (const row of store.db.prepare("SELECT story_id FROM story_documents WHERE document_id = ?").all(id)) stories.add(row.story_id);
+      if (!classificationChanged && !promotionChanged) continue;
+      if (classificationChanged) {
+        store.db.prepare("UPDATE documents SET classification_json = ? WHERE id = ?").run(JSON.stringify(document.classification), id);
+        store.db.prepare("DELETE FROM document_domains WHERE document_id = ?").run(id);
+        const insert = store.db.prepare("INSERT INTO document_domains (document_id, domain, confidence) VALUES (?, ?, ?)");
+        for (const entry of document.domains) insert.run(id, entry.domain, entry.confidence);
+        documentWrites += 1;
+      }
+      if (promotionChanged) { store.saveDocumentPromotionDecision(id, decision); promotionWrites += 1; }
+      if (samples.length < 20 && current.promotion_decision?.status === "promoted" && decision.status === "held") samples.push({ document_id: id, title: current.title, reasons: decision.reason_codes });
+    }
+    for (const storyId of stories) {
+      const derived = deriveEventForStory(store, storyId, evaluatedAt);
+      if (!derived) heldEvents += store.holdEventForStory(storyId, evaluatedAt);
+      else {
+        const current = store.getStoryEvent(storyId);
+        // A classification-only replay must not age an unrelated Event lifecycle.
+        if (current?.publication_status === "published") derived.lifecycle = current.lifecycle;
+        if (!current || current.publication_status !== "published" || eventCoreSignature(current) !== eventCoreSignature(derived)
+            || relevanceSignature(current.regional_relevance) !== relevanceSignature(derived.regional_relevance)) {
+          store.saveEvent(derived); eventWrites += 1;
+        }
+      }
+    }
+    return { documents_evaluated: total, classification_writes: documentWrites, promotion_writes: promotionWrites, event_writes: eventWrites, held_events: heldEvents, samples };
+  });
+}
 
 export function planRegionalReprocess(store, options = {}) {
   const evaluatedAt = options.evaluatedAt || new Date().toISOString();

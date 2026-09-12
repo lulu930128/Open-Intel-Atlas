@@ -13,6 +13,7 @@ export class SourceHttpError extends Error {
 
 export function createHttpClient(config) {
   return {
+    getBytes: (url, options = {}) => request(url, { ...options, parse: "bytes" }, config),
     getJson: (url, options = {}) => request(url, { ...options, parse: "json" }, config),
     getText: (url, options = {}) => request(url, { ...options, parse: "text" }, config)
   };
@@ -82,7 +83,7 @@ async function request(url, options, config) {
       }
 
       const text = buffer.toString("utf8");
-      let data = text;
+      let data = options.parse === "bytes" ? buffer : text;
       if (options.parse === "json") {
         try {
           data = JSON.parse(text.replace(/^\uFEFF/, ""));
@@ -95,7 +96,8 @@ async function request(url, options, config) {
         }
       }
 
-      const rawPayload = text.slice(0, config.rawPayloadBytes);
+      const rawText = options.parse === "bytes" ? `base64:${buffer.toString("base64")}` : text;
+      const rawPayload = rawText.slice(0, config.rawPayloadBytes);
       return {
         url: safeUrl,
         status: response.status,
@@ -103,7 +105,7 @@ async function request(url, options, config) {
         etag: response.headers.get("etag") || null,
         lastModified: response.headers.get("last-modified") || null,
         rawPayload,
-        payloadTruncated: text.length > rawPayload.length,
+        payloadTruncated: rawText.length > rawPayload.length,
         data
       };
     } catch (error) {

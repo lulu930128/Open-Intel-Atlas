@@ -22,6 +22,13 @@ export async function handleV1Api(request, response, requestUrl, context) {
   const { pathname } = requestUrl;
   if (!pathname.startsWith("/api/v1")) return false;
 
+  if (request.method === "GET" && pathname.startsWith("/api/v1/macro/")) {
+    const routes = { calendar: "macroCalendar", releases: "macroReleases", indicators: "macroIndicators", observations: "macroObservations" };
+    const tail = pathname.slice("/api/v1/macro/".length);
+    if (routes[tail]) return sendJson(response, context.capabilities[routes[tail]](Object.fromEntries(requestUrl.searchParams)));
+    if (tail.startsWith("releases/")) return sendJson(response, context.capabilities.macroRelease({ release_id: decodePathId(tail.slice(9)) }));
+  }
+
   if (request.method === "GET" && pathname === "/api/v1/health") {
     const stats = context.store.getStats();
     return sendV1Json(response, {
@@ -80,7 +87,8 @@ export async function handleV1Api(request, response, requestUrl, context) {
   if (request.method === "GET" && pathname === "/api/v1/stories") {
     const filters = listFilters(requestUrl.searchParams);
     filters.status = optional(requestUrl.searchParams.get("status"));
-    return sendPage(response, context.store.listStories(filters), context, { domain: filters.domain });
+    filters.presentation = optional(requestUrl.searchParams.get("presentation"));
+    return sendPage(response, context.capabilities.storiesPage(filters), context, { domain: filters.domain });
   }
 
   const storyId = pathId(pathname, "/api/v1/stories/");
@@ -98,12 +106,82 @@ export async function handleV1Api(request, response, requestUrl, context) {
         profile: optional(requestUrl.searchParams.get("profile"))
       }));
     }
-    return sendPage(response, context.store.listEvents(filters), context, { domain: filters.domain });
+    return sendPage(response, context.capabilities.eventsPage(filters), context, { domain: filters.domain });
+  }
+
+  if (request.method === "GET" && pathname === "/api/v1/company-disclosures") {
+    return sendJson(response, context.capabilities.companyDisclosures({
+      exchange: optional(requestUrl.searchParams.get("exchange")), symbol: optional(requestUrl.searchParams.get("symbol")),
+      markets: requestUrl.searchParams.getAll("market"), cursor: optional(requestUrl.searchParams.get("cursor")),
+      limit: parseLimit(requestUrl.searchParams.get("limit"), 20), profile: optional(requestUrl.searchParams.get("profile"))
+    }));
+  }
+
+  if (request.method === "GET" && pathname === "/api/v1/company-news") {
+    return sendJson(response, context.capabilities.companyNewsLatest({
+      markets: requestUrl.searchParams.getAll("market"),
+      cursor: optional(requestUrl.searchParams.get("cursor")),
+      limit: parseLimit(requestUrl.searchParams.get("limit"), 20),
+      profile: optional(requestUrl.searchParams.get("profile")) || "company_news_latest_v1"
+    }));
   }
 
   const eventId = pathId(pathname, "/api/v1/events/");
   if (request.method === "GET" && eventId !== null) {
     return sendResource(response, context.store.getEvent(eventId), "event", context);
+  }
+
+  if (request.method === "GET" && pathname === "/api/v1/companies") {
+    return sendJson(response, context.capabilities.companyList({
+      market: optional(requestUrl.searchParams.get("market")),
+      q: optional(requestUrl.searchParams.get("q")),
+      cursor: optional(requestUrl.searchParams.get("cursor")),
+      limit: parseLimit(requestUrl.searchParams.get("limit")),
+      profile: "company_list_v1"
+    }));
+  }
+
+  const stockNewsMatch = pathname.match(/^\/api\/v1\/stocks\/([^/]+)\/([^/]+)\/news$/);
+  if (request.method === "GET" && stockNewsMatch) {
+    return sendJson(response, context.capabilities.companyNewsStock({
+      exchange: decodePathId(stockNewsMatch[1]), symbol: decodePathId(stockNewsMatch[2]),
+      limit: parseLimit(requestUrl.searchParams.get("limit"), 20),
+      cursor: optional(requestUrl.searchParams.get("cursor")),
+      profile: optional(requestUrl.searchParams.get("profile"))
+    }));
+  }
+
+  const stockMatch = pathname.match(/^\/api\/v1\/stocks\/([^/]+)\/([^/]+)$/);
+  if (request.method === "GET" && stockMatch) {
+    return sendJson(response, context.capabilities.companySnapshot({
+      exchange: decodePathId(stockMatch[1]),
+      symbol: decodePathId(stockMatch[2]),
+      limit: parseLimit(requestUrl.searchParams.get("limit"), 12)
+    }));
+  }
+
+  const companyActionMatch = pathname.match(/^\/api\/v1\/companies\/([^/]+)\/(events|evidence|relations|snapshot)$/);
+  if (request.method === "GET" && companyActionMatch) {
+    const input = {
+      entity_id: decodePathId(companyActionMatch[1]),
+      limit: parseLimit(requestUrl.searchParams.get("limit"), 20),
+      cursor: optional(requestUrl.searchParams.get("cursor")),
+      story_cursor: optional(requestUrl.searchParams.get("story_cursor")),
+      document_cursor: optional(requestUrl.searchParams.get("document_cursor"))
+    };
+    const action = companyActionMatch[2];
+    const capability = {
+      events: context.capabilities.companyEvents,
+      evidence: context.capabilities.companyEvidence,
+      relations: context.capabilities.companyRelations,
+      snapshot: context.capabilities.companySnapshot
+    }[action];
+    return sendJson(response, capability(input));
+  }
+
+  const companyId = pathId(pathname, "/api/v1/companies/");
+  if (request.method === "GET" && companyId !== null) {
+    return sendJson(response, context.capabilities.companyProfile({ entity_id: companyId }));
   }
 
   if (request.method === "GET" && pathname === "/api/v1/entities") {
@@ -263,6 +341,7 @@ function listFilters(searchParams, options = {}) {
 
 function eventFilters(searchParams) {
   const filters = listFilters(searchParams);
+  filters.presentation = optional(searchParams.get("presentation"));
   filters.event_type = optional(searchParams.get("event_type"));
   filters.country = normalizeCountry(searchParams.get("country"));
   filters.entity = optional(searchParams.get("entity"));
@@ -296,6 +375,7 @@ function sendResource(response, value, resourceName, context) {
 
 function sendPage(response, result, context, scope = {}) {
   return sendV1Json(response, {
+    ...(result.query ? { query: result.query } : {}),
     data: result.items,
     pagination: { next_cursor: result.next_cursor, count: result.items.length }
   }, context, 200, scope);

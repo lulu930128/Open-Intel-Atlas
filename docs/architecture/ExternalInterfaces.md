@@ -1,5 +1,18 @@
 # 對外介面與整合契約
 
+## 2026-09-08 新增公司公告介面（working tree）
+
+- `GET /api/v1/company-disclosures`／MCP `atlas.company.disclosures` 共用 `company_disclosures_v1`，僅返回具 `company.disclosures` capability 的 `financial_release`，含已 held 的例行公告。
+- `market=TWSE|TPEX` 可篩選市場；`exchange`＋`symbol` 成對提供時依 canonical identity 篩選個股，並以該 exchange 決定市場。找不到或 identity ambiguous 時 fail closed。
+- `limit`、`cursor` 維持有界分頁及 byte budget，cursor 綁定市場／個股，不能跨 scope 使用。公司關聯未完成的公告仍可出現在市場列表，不由 UI 猜 issuer。
+- coverage 來自公告來源的啟用／執行／更新狀態，與 Yahoo news target coverage 分離；bounded window 不保證完整歷史。回應 status 可以是 missing／stale／partial／failed／disabled。
+- 原 `company_news_latest_v1`、`company_news_stock_v1` 保持 news-only；不以新增公告需求默默擴大它們的內容型別。
+- `GET /api/v1/companies`／`atlas.company.list` 新增 optional `market`，公司名稱／代號搜尋仍由 backend 完成。
+- `/stocks.html` 無 locator 時是股票聚合入口；個股頁保留原 dossier，在證據 tab 提供可分頁的官方公告，避免公告被前 12 筆一般新聞擠出。
+- 文件 projection 新增 `classification`；Event projection 新增 `publication_status`／`publication_reason`。transport 不重新分類。
+
+副本驗證：`node scripts/verify-classification-convergence-copy.mjs [source-db]`。此命令只對唯讀備份後的 temp DB apply，輸出 acceptance.json 與副本路徑；`node --env-file-if-exists=.env scripts/preview-classification-copy.mjs <copied-db>` 可啟動禁止 provider I/O 的 loopback browser preview。這兩個命令不更新正式資料庫或重啟正式 Tray。
+
 ## 1. 目標
 
 REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Transport 可以不同，但 taxonomy、evidence、freshness、coverage、verification 與排序規則不能各自重做。
@@ -24,6 +37,8 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 | `GET /api/v1/documents[/{id}]` | normalized document list/detail | 已實作 |
 | `GET /api/v1/stories[/{id}]` | story list/detail、timeline、evidence、verification | 已實作 |
 | `GET /api/v1/events[/{id}]` | 結構化 event list/detail | 已實作 |
+| `GET /api/v1/company-news` | 台灣上市櫃 Company Documents；聚合 canonical Company／Security context、rights 與 target coverage | 已實作 |
+| `GET /api/v1/stocks/{exchange}/{symbol}/news` | exact stock Company News Documents；個股 target coverage、rights、scoped cursor | 已實作，正式 runtime 採用另驗 |
 | `GET /api/v1/entities[/{id}]` | entity list/profile | 已實作 |
 | `GET /api/v1/entities/{id}/events` | entity 關聯 events | 已實作 |
 | `GET /api/v1/search` | bounded mixed-result search | 已實作 |
@@ -31,6 +46,8 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 | `GET /api/v1/changes` | durable Story/Event change feed；opaque cursor 綁定 filter scope | 已實作 |
 | `GET /api/v1/collector` | collector/scheduler 狀態 | 已實作、local operational surface |
 | `POST /api/v1/collect` | bounded source collection control | 已實作、loopback only；不屬 public read surface |
+
+Target-based sources 在 Source `health.targets` 另外公開 `registered`、`enabled`、`failed` 與 `latest_success_at` 摘要。Company snapshot 的 `coverage.general_news` 使用 company-specific target state，並公開 rolling 30-day `document_count`；provider source healthy 不能替未執行的 target 宣告 current。
 
 下列項目仍是 target state，不應被 client 當作 1.3.0 已上線 contract：
 
@@ -47,6 +64,11 @@ REST、MCP、OMI 與 Kuro 必須使用同一個 backend capability layer。Trans
 - Events／Brief：另支援單一 `event_type`、ISO 3166-1 alpha-2 `country`、`entity`、`severity`、`lifecycle`、`verification`；Brief 另支援 `presentation=global|east_asia|taiwan_focus|japan_focus`。
 - Sources：支援單一 `domain`。
 - Changes：支援單一 `domain`、`change_type`、opaque `cursor` 與 `limit`。
+- Company News：`market=TWSE|TPEX` 可重複或逗號分隔，`limit=1..50`，opaque cursor 綁定排序與 market scope；回傳一個 canonical Document 一列，不與 Event stream 混合。
+- Stock News：`exchange=TWSE|TPEX`、exact symbol、`limit=1..50`（預設 20）、`cursor`；profile 為 `company_news_stock_v1`。REST 與 `atlas.company.news` 共用 `companyNewsStock`。Cursor 綁定 profile、exchange、symbol、Company/Security IDs；排序為 `COALESCE(published_at, observed_at, fetched_at), id` 降冪，512 KiB item budget 截斷後從最後一筆已回傳文件續頁。
+- Stock News 的 `stock` 包含 company_id/security_id。每篇文件保留所有已解析公司關聯：同篇共同報導可同時出現在不同股票頁，無目標關聯的文件不回傳。identity 不唯一為 409，查無 identity 為 404，錯誤市場／cursor／limit 為 400。
+- Stock News `freshness`／`coverage.scope=stock` 只使用該股票 target，`as_of` 為最後成功時間、`data_as_of` 為最後匹配時間；rolling document_count 仍是 company scope，明示 `document_count_scope=company`。成功零筆不等於沒有新聞，未註冊 target 為 missing，best_effort 不代表完整覆蓋。
+- Stored news 的 rights usage_context 必須匹配 server contentUsageContext，否則新 Stock News 接口回 403；保留原標題、來源與完整 rights。此接口用於本機服務間整合，不代表已完成公網 authentication／rate limit 或擴大內容使用政策。
 - Search：要求至少兩個字元的 `q`，並支援 `limit` 與可選 representation `profile`。
 - `verification` 僅接受 `unverified`、`single_source`、`multi_source`、`primary_source_confirmed`、`official_confirmed`、`disputed`、`corrected`、`retracted`。
 
@@ -201,3 +223,33 @@ Change cursor 是 opaque global sequence 加上 filter scope。Consumer 必須�
 6. `待完成`：以 access log/contract version 確認 legacy consumer 歸零後，才討論移除舊 API。
 
 完成整合的證據不是「endpoint 存在」，而是 consumer runtime 實際讀到正確 contract，並在 stale/partial/failure state 下保持 truthful degradation。
+
+## Local runtime discovery
+
+`GET /api/v1/runtime` is loopback-only and returns the running instance identity without DB queries.
+The executable publishes `data/runtime/atlas-endpoint.json` atomically after listening; it contains
+schema_version=1, service=open-intel-atlas, installation_id, instance_id, pid, started_at, version,
+status=running and base_url. This readiness snapshot is not a liveness lease: consumers must compare
+it to the live runtime endpoint. Shutdown does not mutate shared state, so an old process cannot
+clobber a successor. `atlas-port.json` remains the Tray's separate port-selection preference.
+Custom DB executables need an explicit `ATLAS_ENDPOINT_STATE_PATH`; embedded runtimes only publish
+when passed `endpointStatePath`. Isolated tests must use their own path. Publication requires a
+loopback listener. Tray's occupied-port duplicate-process protection remains unchanged.
+
+## Company News relevance and repair
+
+Yahoo target scope is discovery provenance, not entity evidence. `entities/companyNewsRelevance.js`
+builds canonical read-only identity context and classifies title / feed summary. Unique canonical
+names/aliases or explicitly formatted tickers produce `content_identity_match` mentions (rule grade
+0.9, not a calibrated probability). Bare numeric matches and unavailable identity fail closed.
+Matched field/text/validator are preserved in mention metadata. Documents remain ineligible for Event promotion.
+
+Only source/target-scoped Yahoo-derived hints may be retracted. Other evidence owners and discovery
+observations survive; validated empty feeds do not advance last_match_at. Target runs distinguish
+NO_ENTITY_MATCH / IDENTITY_UNAVAILABLE from fetch failure.
+
+`node scripts/remediate-company-news-target-hints.mjs --db PATH --report NEW_PATH` is read-only and
+bounded to 1,000 Yahoo documents. Review its exact before/after plan; stop the writer before
+`--apply --backup NEW_BACKUP_PATH`. Apply backs up first and atomically updates metadata, mentions,
+Story links and historical match timestamps. It never uses remediation time as freshness.
+Rerun dry-run must show zero changes. Originals, source runs and observations are not deleted.

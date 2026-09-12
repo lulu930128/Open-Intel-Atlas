@@ -14,7 +14,7 @@ import { buildSourceRegistry } from "../src/atlasSourceRegistry.js";
 import { loadConfig } from "../src/config.js";
 import { createIntelDocument } from "../src/documents/normalize.js";
 
-test("schema v1 database upgrades to v5 without losing source runs", () => {
+test("schema v1 database upgrades to current schema without losing source runs", () => {
   withTempDatabase((dbPath) => {
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -47,7 +47,7 @@ test("schema v1 database upgrades to v5 without losing source runs", () => {
     legacy.close();
 
     const store = openAtlasStore(dbPath);
-    assert.equal(store.getStats().schema_version, 5);
+    assert.equal(store.getStats().schema_version, 11);
     assert.equal(store.getStats().source_runs, 1);
     assert.equal(store.db.prepare("SELECT status FROM source_runs WHERE id = ?").get("run:legacy").status, "success");
     const sourceColumns = store.db.prepare("PRAGMA table_info(sources)").all().map((column) => column.name);
@@ -252,6 +252,29 @@ test("freshness coverage is scoped by domain", () => {
     assert.equal(politicsState.coverage.failed_sources, 1);
     assert.equal(hazardsState.coverage.status, "full");
     assert.equal(hazardsState.coverage.failed_sources, 0);
+  });
+});
+
+test("conditional validator ignores raw fetches from failed downstream runs", () => {
+  withTempStore((store) => {
+    const source = fixtureSource("validator-failure-source", "finance");
+    store.registerSources([source]);
+    const requestUrl = "https://example.test/master";
+    const failedRun = store.beginSourceRun(source, "2026-09-06T00:00:00.000Z");
+    store.saveRawFetches(failedRun, source.id, [{
+      id: "raw:failed", request_url: requestUrl, http_status: 200, content_type: "application/json",
+      etag: '"failed-etag"', last_modified: null, content_hash: "failed", payload_text: "[]", payload_truncated: 0
+    }]);
+    store.finishSourceRun(failedRun, { finishedAt: "2026-09-06T00:00:01.000Z", status: "failed" });
+    assert.equal(store.getHttpValidator(source.id, requestUrl), null);
+
+    const successRun = store.beginSourceRun(source, "2026-09-06T00:01:00.000Z");
+    store.saveRawFetches(successRun, source.id, [{
+      id: "raw:success", request_url: requestUrl, http_status: 200, content_type: "application/json",
+      etag: '"success-etag"', last_modified: null, content_hash: "success", payload_text: "[]", payload_truncated: 0
+    }]);
+    store.finishSourceRun(successRun, { finishedAt: "2026-09-06T00:01:01.000Z", status: "success" });
+    assert.deepEqual(store.getHttpValidator(source.id, requestUrl), { etag: '"success-etag"', lastModified: null });
   });
 });
 

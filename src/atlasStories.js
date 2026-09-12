@@ -1,4 +1,5 @@
 import { jaccardSimilarity, parseJson } from "./core/utils.js";
+import { primaryDomain as choosePrimaryDomain } from "./atlasClassification.js";
 
 export const CLUSTER_METHOD = "deterministic-title-event-key";
 export const CLUSTER_VERSION = "1.0.0";
@@ -11,11 +12,11 @@ export function attachDocumentToStory(store, document, now = new Date().toISOStr
     return { storyId: exact.id, method: eventKey ? "event-key" : "dedupe-key", similarity: 1 };
   }
 
-  const primaryDomain = [...document.domains].sort((left, right) => right.confidence - left.confidence)[0]?.domain || "politics";
+  const primaryDomain = choosePrimaryDomain(document.domains);
   const observed = Date.parse(document.observed_at || document.published_at || document.fetched_at || now);
   const windowMs = document.document_type === "hazard_observation" ? 14 * 24 * 60 * 60 * 1000 : 72 * 60 * 60 * 1000;
   const since = new Date((Number.isFinite(observed) ? observed : Date.now()) - windowMs).toISOString();
-  const candidates = store.listStoryCandidates(primaryDomain, since, 120);
+  const candidates = primaryDomain ? store.listStoryCandidates(primaryDomain, since, 120) : [];
   let best = null;
 
   for (const candidate of candidates) {

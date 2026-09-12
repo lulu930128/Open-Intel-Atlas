@@ -1,5 +1,5 @@
 import { parseCsv, parseRocTimestamp, safeNumber } from "./core/utils.js";
-import { sourceFetchResult } from "./atlasContracts.js";
+import { createSourceResult, sourceFetchResult } from "./atlasContracts.js";
 import { parseFeedItems } from "./atlasParsers.js";
 import { createIntelDocument, dedupeDocuments } from "./documents/normalize.js";
 
@@ -18,6 +18,7 @@ export const financeSources = [
     docsUrl: "https://openapi.twse.com.tw/",
     attribution: "臺灣證券交易所",
     policyNote: "Official listed-company material information. Preserve company code, fact date and original disclosure context.",
+    coverage: { capabilities: ["company.disclosures"], markets: ["TWSE"], guarantee: "bounded_window", recoverability: "provider_history" },
     cadenceMs: 10 * 60 * 1000,
     timeoutMs: 12000,
     defaultEnabled: true,
@@ -146,23 +147,38 @@ export const financeSources = [
   }
 ];
 
-async function fetchTwseMaterialInfo({ source, http, now }) {
+export async function fetchTwseMaterialInfo({ source, http, now }) {
   const startedAt = now();
   const fetch = await http.getJson("https://openapi.twse.com.tw/v1/opendata/t187ap04_L", { timeoutMs: source.timeoutMs });
   const fetchedAt = now();
-  const rows = Array.isArray(fetch.data) ? fetch.data : [];
-  const documents = rows.slice(0, 100).map((row) => {
+  if (Number(fetch.status) === 304) {
+    return createSourceResult({
+      source,
+      fetches: fetch,
+      startedAt,
+      finishedAt: fetchedAt,
+      counts: { upstream_item_count: null, processed_item_count: 0 },
+      completeness: { status: "unknown", truncated: false },
+      warnings: ["not_modified_reuses_prior_disclosure"]
+    });
+  }
+  if (!Array.isArray(fetch.data)) {
+    throw new TypeError(`${source.id} returned unsupported_shape: expected an array payload`);
+  }
+  const rows = fetch.data;
+  const candidates = rows.map((row) => {
     const title = row["主旨 "] ?? row["主旨"];
     const observedAt = parseRocTimestamp(row["發言日期"] || row["事實發生日"], row["發言時間"]);
     const factDate = parseRocTimestamp(row["事實發生日"]);
     const companyCode = String(row["公司代號"] || "").trim();
     const companyName = String(row["公司名稱"] || "").trim();
     const externalId = `${companyCode}:${row["發言日期"] || ""}:${row["發言時間"] || ""}:${title || ""}`;
+    if (!companyCode || !title) return null;
     return createIntelDocument(
       source,
       {
         externalId,
-        canonicalUrl: source.homepage,
+        canonicalUrl: twseDisclosureUrl(source.homepage, companyCode, row["發言日期"], row["發言時間"]),
         title: companyName ? `${companyName} (${companyCode})：${title}` : title,
         summary: row["說明"],
         publishedAt: observedAt,
@@ -177,9 +193,16 @@ async function fetchTwseMaterialInfo({ source, http, now }) {
         tags: ["twse", "重大訊息", companyCode, companyName, row["符合條款"]],
         location: { label: "Taiwan", countryCode: "TW", precision: "issuer", confidence: 0.8 },
         rawMetadata: {
-          event_eligible: true,
+          disclosure_type: "company_material_information",
           company_code: companyCode,
           company_name: companyName,
+          exchange: "TWSE",
+          entity_hints: [{
+            name: companyName,
+            role: "issuer",
+            confidence: 1,
+            identifier: { namespace: "ticker", authority: "TWSE", scope: "TWSE", value: companyCode }
+          }],
           clause: row["符合條款"] || null,
           fact_date: factDate,
           statement_date: observedAt
@@ -187,8 +210,23 @@ async function fetchTwseMaterialInfo({ source, http, now }) {
       },
       fetchedAt
     );
+  }).filter(Boolean);
+  const failed = rows.length - candidates.length;
+  const documents = dedupeDocuments(candidates);
+  return createSourceResult({
+    source,
+    fetches: fetch,
+    documents,
+    startedAt,
+    finishedAt: fetchedAt,
+    counts: {
+      upstream_item_count: rows.length,
+      processed_item_count: candidates.length,
+      failed_count: failed
+    },
+    completeness: { status: failed === 0 ? "complete" : "partial", truncated: false },
+    warnings: failed > 0 ? [`invalid_required_fields:${failed}`] : []
   });
-  return sourceFetchResult(source, fetch, dedupeDocuments(documents), startedAt, fetchedAt);
 }
 
 async function fetchSecFilings({ source, http, config, now }) {
@@ -434,4 +472,12 @@ function formatUsd(value) {
 function formatPercent(value) {
   const number = safeNumber(value, 0);
   return `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+
+function twseDisclosureUrl(homepage, companyCode, date, time) {
+  const url = new URL(homepage);
+  url.searchParams.set("co_id", companyCode);
+  if (date) url.searchParams.set("date", String(date));
+  if (time) url.searchParams.set("time", String(time));
+  return url.toString();
 }

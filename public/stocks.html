@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Open Intel Atlas 公司情報頁：公司識別、重大事件、原始證據與資料完整度。" />
+    <meta name="theme-color" content="#e7ecea" />
+    <title>公司情報｜Open Intel Atlas</title>
+    <link rel="stylesheet" href="/stocks.css" />
+    <link rel="stylesheet" href="/wideNewsroom.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要內容</a>
+    <div class="market-wire">
+      <div class="stock-shell market-wire__inner">
+        <p>COMPANY / MARKET INTELLIGENCE</p>
+        <p id="data-state"><span class="state-lamp" aria-hidden="true"></span>正在核對 canonical data</p>
+      </div>
+    </div>
+
+    <header class="stock-header">
+      <div class="stock-shell stock-header__inner">
+        <a class="stock-wordmark" href="/" aria-label="回到 Open Intel Atlas 首頁"><span>OPEN INTEL</span><strong>ATLAS</strong></a>
+        <p class="stock-header__mission">公司動態與官方公告<br />閱讀消息，查閱原始證據</p>
+        <form class="ticker-search" id="ticker-search" role="search">
+          <label><span>市場</span><input name="exchange" value="TWSE" maxlength="12" aria-label="交易所" /></label>
+          <label><span>代號</span><input name="symbol" value="2330" maxlength="32" aria-label="股票代號" /></label>
+          <button type="submit">開啟公司檔案</button>
+        </form>
+      </div>
+    </header>
+
+    <nav class="atlas-navigation" aria-label="切換新聞領域"><div class="stock-shell">
+      <a href="/">本期摘要</a><a href="/domain.html?domain=politics">政治</a><a href="/domain.html?domain=technology">科技發展</a><a href="/domain.html?domain=finance">金融</a><a href="/domain.html?domain=hazards">氣象與災害</a><a href="/stocks.html" aria-current="page">股票</a><a href="/atlas.html">情報地圖</a><a href="/macro.html">總體數據</a>
+    </div></nav>
+
+    <main id="main-content" class="stock-shell">
+      <section id="stock-landing" hidden></section>
+      <p class="stock-breadcrumb"><a href="/stocks.html">股票情報</a> / 公司與證據</p>
+      <section class="company-plate" id="company-plate" aria-labelledby="company-name" aria-busy="true">
+        <div class="company-plate__loading">正在解析市場代號與公司身分…</div>
+      </section>
+
+      <div class="dossier" id="dossier" hidden>
+        <nav class="company-tabs" role="tablist" aria-label="公司情報分類">
+          <button type="button" role="tab" id="tab-news" aria-controls="panel-news" aria-selected="true" data-tab="news">最新新聞</button>
+          <button type="button" role="tab" id="tab-events" aria-controls="panel-events" aria-selected="false" tabindex="-1" data-tab="events">事件</button>
+          <button type="button" role="tab" id="tab-evidence" aria-controls="panel-evidence" aria-selected="false" tabindex="-1" data-tab="evidence">證據</button>
+          <button type="button" role="tab" id="tab-company" aria-controls="panel-company" aria-selected="false" tabindex="-1" data-tab="company">公司資料</button>
+        </nav>
+        <div class="dossier__main">
+          <section id="panel-news" role="tabpanel" aria-labelledby="tab-news" tabindex="0">
+            <header class="section-title"><p>COMPANY NEWS</p><h2>最新新聞</h2><span id="news-count">—</span></header>
+            <div id="news-coverage" class="news-coverage" aria-live="polite">正在讀取個股新聞狀態…</div>
+            <div id="company-news" aria-live="polite" aria-busy="true"><p class="empty-register">新聞載入中…</p></div>
+            <p id="news-error" role="status"></p>
+            <button type="button" id="news-more" class="news-more" hidden>載入較早新聞</button>
+          </section>
+          <section class="signal-ledger" id="panel-events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
+            <header class="section-title"><p>01 / MATERIAL SIGNALS</p><h2 id="signal-title">公司事件</h2><span id="event-count">—</span></header>
+            <div id="company-events" class="event-register"></div>
+          </section>
+
+          <section class="evidence-desk" id="panel-evidence" role="tabpanel" aria-labelledby="tab-evidence" tabindex="0" hidden>
+            <header class="section-title"><h2>官方公司公告</h2></header>
+            <div id="stock-disclosures"></div>
+            <header class="section-title"><p>02 / SOURCE DOCUMENTS</p><h2 id="evidence-title">證據紀錄</h2><span id="document-count">—</span></header>
+            <div id="company-documents" class="document-register"></div>
+          </section>
+        </div>
+
+        <aside class="identity-rail" id="panel-company" role="tabpanel" aria-labelledby="tab-company" tabindex="0" hidden>
+          <section class="identity-block">
+            <p class="rail-index">IDENTITY LEDGER</p><h2 id="identity-title">公司身分</h2>
+            <dl id="identity-facts"></dl>
+          </section>
+          <section class="identity-block"><p class="rail-index">OFFICIAL IDENTIFIERS</p><div id="identifier-list"></div></section>
+          <section class="identity-block"><p class="rail-index">ALIASES</p><div id="alias-list"></div></section>
+          <section class="identity-block"><p class="rail-index">RELATIONSHIPS</p><div id="relation-list"></div></section>
+          <section class="method-note"><strong>如何閱讀</strong><p>公司名稱只由正式 master 更新；新聞文字只能解析成 mention。每筆關聯都保留方法與來源 lineage。</p></section>
+        </aside>
+      </div>
+
+      <section class="page-error" id="page-error" hidden role="alert"></section>
+    </main>
+
+    <footer class="stock-footer"><div class="stock-shell"><p>OPEN INTEL ATLAS / COMPANY DOSSIER</p><p id="generated-at">等待資料時間</p><a href="/domain.html?domain=finance">回到金融觀察 ↗</a></div></footer>
+    <noscript><p class="stock-shell">公司資料需要 JavaScript 才能讀取。請啟用後重新整理；也可使用上方導覽返回首頁。</p></noscript>
+    <script src="/stocks.js" type="module"></script>
+  </body>
+</html>

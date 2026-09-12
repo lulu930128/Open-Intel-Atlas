@@ -2,3 +2,7 @@
 
 *.png binary
 *.sqlite binary
+
+# Official HTML/PDF-text fixtures retain upstream whitespace and table layout.
+test/fixtures/macro/** -whitespace
+test/fixtures/macro-expanded/** -whitespace
